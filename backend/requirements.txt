@@ -1,0 +1,21 @@
+# ローカル AI 議事録作成アプリ バックエンド依存関係
+# Python 3.11+ 推奨
+
+# Web フレームワーク
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# データベース
+sqlalchemy==2.0.36
+
+# HTTP クライアント（Ollama 連携）
+httpx==0.28.1
+
+# 音声文字起こし（CPU/int8 量子化）
+faster-whisper==1.1.0
+
+# データバリデーション（FastAPI に含まれるが明示）
+pydantic==2.10.3
+
+# ファイルアップロード
+python-multipart==0.0.20

@@ -1,0 +1,16 @@
+{
+  "name": "local-minutes-app",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "cd frontend && pnpm dev",
+    "build": "cd frontend && pnpm build",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "backend": "source backend/.venv/bin/activate && python3 -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

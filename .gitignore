@@ -1,0 +1,47 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Node.js
+frontend/node_modules/
+frontend/dist/
+node_modules/
+
+# Tauri
+src-tauri/target/
+
+# データベース・音声ファイル（ローカルデータ）
+*.db
+*.db-shm
+*.db-wal
+
+# 環境変数
+.env
+.env.local
+.env.*.local
+
+# エディタ
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ログ
+*.log
+logs/
+
+# テスト
+.pytest_cache/
+htmlcov/
+.coverage

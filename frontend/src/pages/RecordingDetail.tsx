@@ -1,0 +1,562 @@
+/**
+ * RecordingDetail.tsx
+ * 録音詳細画面。
+ * ステップ形式で以下の処理を順番に実行する:
+ *   1. 文字起こし
+ *   2. テキスト編集
+ *   3. 要約生成
+ *   4. 議事録確認
+ *   5. 音声削除
+ */
+
+import { useState, useEffect, useCallback } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import {
+  getRecording,
+  getTranscript,
+  getSummary,
+  startTranscription,
+  startSummarization,
+  pollJobUntilDone,
+  deleteAudio,
+  retainAudio,
+  Recording,
+  Transcript,
+  Summary,
+  getStateLabel,
+  getStateBadgeClass,
+} from "../api/client";
+import TranscriptEditor from "../components/TranscriptEditor";
+import SummaryViewer from "../components/SummaryViewer";
+import AudioDeleteDialog from "../components/AudioDeleteDialog";
+
+type Step = "transcribe" | "edit" | "summarize" | "review" | "audio";
+
+export default function RecordingDetail() {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const recordingId = Number(id);
+
+  const [recording, setRecording] = useState<Recording | null>(null);
+  const [transcript, setTranscript] = useState<Transcript | null>(null);
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const [activeStep, setActiveStep] = useState<Step>("transcribe");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // 処理状態
+  const [transcribing, setTranscribing] = useState(false);
+  const [summarizing, setSummarizing] = useState(false);
+  const [jobError, setJobError] = useState<string | null>(null);
+
+  // 音声削除ダイアログ
+  const [showAudioDialog, setShowAudioDialog] = useState(false);
+
+  // データ取得
+  const fetchData = useCallback(async () => {
+    try {
+      const rec = await getRecording(recordingId);
+      setRecording(rec);
+
+      // 文字起こし結果を取得（存在する場合）
+      if (["TRANSCRIBED", "SUMMARIZING", "DONE"].includes(rec.state)) {
+        try {
+          const t = await getTranscript(recordingId);
+          setTranscript(t);
+        } catch {
+          // まだ存在しない場合は無視
+        }
+      }
+
+      // 要約結果を取得（存在する場合）
+      if (rec.state === "DONE") {
+        try {
+          const s = await getSummary(recordingId);
+          setSummary(s);
+        } catch {
+          // まだ存在しない場合は無視
+        }
+      }
+
+      // 現在の状態に応じてアクティブステップを設定
+      if (rec.state === "IMPORTED") setActiveStep("transcribe");
+      else if (rec.state === "TRANSCRIBED") setActiveStep("edit");
+      else if (rec.state === "DONE") setActiveStep("review");
+
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "データの取得に失敗しました");
+    } finally {
+      setLoading(false);
+    }
+  }, [recordingId]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // 文字起こし開始
+  const handleStartTranscription = async () => {
+    setTranscribing(true);
+    setJobError(null);
+    try {
+      const job = await startTranscription(recordingId);
+      // ポーリングで完了を待つ
+      const completedJob = await pollJobUntilDone(job.id);
+      if (completedJob.status === "error") {
+        throw new Error(completedJob.log || "文字起こしに失敗しました");
+      }
+      // データを再取得
+      await fetchData();
+      setActiveStep("edit");
+    } catch (e) {
+      setJobError(e instanceof Error ? e.message : "文字起こしに失敗しました");
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  // 要約生成開始
+  const handleStartSummarization = async () => {
+    setSummarizing(true);
+    setJobError(null);
+    try {
+      const job = await startSummarization(recordingId);
+      // ポーリングで完了を待つ
+      const completedJob = await pollJobUntilDone(job.id, 5000);
+      if (completedJob.status === "error") {
+        throw new Error(completedJob.log || "要約生成に失敗しました");
+      }
+      // データを再取得
+      await fetchData();
+      setActiveStep("review");
+      // 完了後に音声削除ダイアログを表示
+      setShowAudioDialog(true);
+    } catch (e) {
+      setJobError(e instanceof Error ? e.message : "要約生成に失敗しました");
+    } finally {
+      setSummarizing(false);
+    }
+  };
+
+  // 音声削除
+  const handleDeleteAudio = async () => {
+    await deleteAudio(recordingId);
+    await fetchData();
+    setShowAudioDialog(false);
+  };
+
+  // 音声保持
+  const handleRetainAudio = async () => {
+    await retainAudio(recordingId);
+    await fetchData();
+    setShowAudioDialog(false);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Spinner className="w-8 h-8 text-primary-600 mx-auto mb-3" />
+          <p className="text-sm text-gray-500">読み込み中...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !recording) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center max-w-sm">
+          <p className="text-red-600 mb-4">{error || "録音が見つかりません"}</p>
+          <button onClick={() => navigate("/")} className="btn-secondary">
+            一覧に戻る
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const steps: { id: Step; label: string; icon: React.ReactNode }[] = [
+    {
+      id: "transcribe",
+      label: "文字起こし",
+      icon: (
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+        </svg>
+      ),
+    },
+    {
+      id: "edit",
+      label: "テキスト編集",
+      icon: (
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+        </svg>
+      ),
+    },
+    {
+      id: "summarize",
+      label: "要約生成",
+      icon: (
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+        </svg>
+      ),
+    },
+    {
+      id: "review",
+      label: "議事録確認",
+      icon: (
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      ),
+    },
+    {
+      id: "audio",
+      label: "音声管理",
+      icon: (
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+        </svg>
+      ),
+    },
+  ];
+
+  // ステップのアクセス可能性判定
+  const isStepAccessible = (step: Step): boolean => {
+    const state = recording.state;
+    switch (step) {
+      case "transcribe": return true;
+      case "edit": return ["TRANSCRIBED", "SUMMARIZING", "DONE"].includes(state);
+      case "summarize": return ["TRANSCRIBED", "SUMMARIZING", "DONE"].includes(state);
+      case "review": return state === "DONE";
+      case "audio": return state === "DONE";
+      default: return false;
+    }
+  };
+
+  const formatDate = (dateStr: string | null): string => {
+    if (!dateStr) return "日付未設定";
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" });
+    } catch { return dateStr; }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* ヘッダー */}
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+        <div className="max-w-3xl mx-auto px-4 py-3">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate("/")}
+              className="p-1.5 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <div className="flex-1 min-w-0">
+              <h1 className="text-base font-bold text-gray-900 truncate">{recording.title}</h1>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-xs text-gray-500">{formatDate(recording.meeting_date)}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getStateBadgeClass(recording.state)}`}>
+                  {getStateLabel(recording.state)}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* ステップナビゲーション */}
+      <div className="bg-white border-b border-gray-200">
+        <div className="max-w-3xl mx-auto px-4">
+          <div className="flex overflow-x-auto scrollbar-hide">
+            {steps.map((step, index) => {
+              const accessible = isStepAccessible(step.id);
+              const isActive = activeStep === step.id;
+              return (
+                <button
+                  key={step.id}
+                  onClick={() => accessible && setActiveStep(step.id)}
+                  disabled={!accessible}
+                  className={`flex items-center gap-1.5 px-3 py-3 text-xs font-medium whitespace-nowrap
+                             border-b-2 transition-colors flex-shrink-0
+                             ${isActive
+                               ? "border-primary-600 text-primary-700"
+                               : accessible
+                               ? "border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300"
+                               : "border-transparent text-gray-300 cursor-not-allowed"
+                             }`}
+                >
+                  <span className={`${isActive ? "text-primary-600" : accessible ? "text-gray-500" : "text-gray-300"}`}>
+                    {step.icon}
+                  </span>
+                  <span className="hidden sm:inline">{index + 1}. </span>
+                  {step.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* メインコンテンツ */}
+      <main className="max-w-3xl mx-auto px-4 py-6">
+        {/* ジョブエラー表示 */}
+        {jobError && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
+            <div className="flex items-start gap-3">
+              <svg className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div>
+                <p className="text-sm font-medium text-red-800">処理エラー</p>
+                <p className="text-sm text-red-700 mt-1">{jobError}</p>
+                <button onClick={() => setJobError(null)} className="text-xs text-red-600 underline mt-1">
+                  閉じる
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ステップ 1: 文字起こし */}
+        {activeStep === "transcribe" && (
+          <div className="card">
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">文字起こし</h2>
+            <p className="text-sm text-gray-600 mb-6">
+              faster-whisper（CPU / int8量子化）を使用してローカルで文字起こしを実行します。
+              10〜15分の音声で数分〜10分程度かかります。
+            </p>
+
+            {recording.state === "TRANSCRIBED" || recording.state === "DONE" ? (
+              <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center gap-3">
+                <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <div>
+                  <p className="text-sm font-medium text-green-800">文字起こし完了</p>
+                  <button
+                    onClick={() => setActiveStep("edit")}
+                    className="text-sm text-green-700 underline mt-0.5"
+                  >
+                    テキストを確認・編集する →
+                  </button>
+                </div>
+              </div>
+            ) : transcribing ? (
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 text-center">
+                <Spinner className="w-10 h-10 text-primary-600 mx-auto mb-3" />
+                <p className="text-sm font-medium text-blue-800">文字起こし処理中...</p>
+                <p className="text-xs text-blue-600 mt-1">
+                  音声の長さによって数分〜10分程度かかります
+                </p>
+                <div className="mt-4 bg-blue-100 rounded-lg p-3">
+                  <p className="text-xs text-blue-700">
+                    処理中はこの画面を開いたままにしてください
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={handleStartTranscription}
+                className="btn-primary w-full py-3"
+              >
+                <svg className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                文字起こしを開始する
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* ステップ 2: テキスト編集 */}
+        {activeStep === "edit" && (
+          <div className="card">
+            <TranscriptEditor
+              recordingId={recordingId}
+              transcript={transcript}
+              onSaved={fetchData}
+            />
+            <div className="mt-6 pt-6 border-t border-gray-100 flex justify-end">
+              <button
+                onClick={() => setActiveStep("summarize")}
+                className="btn-primary"
+              >
+                要約生成へ進む →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ステップ 3: 要約生成 */}
+        {activeStep === "summarize" && (
+          <div className="card">
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">要約・議事録生成</h2>
+            <p className="text-sm text-gray-600 mb-6">
+              Ollama（ローカル LLM）を使用して議事録を生成します。
+              長文テキストは分割要約 → 統合要約の2段階で処理します。
+            </p>
+
+            {recording.state === "DONE" ? (
+              <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center gap-3">
+                <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <div>
+                  <p className="text-sm font-medium text-green-800">議事録生成完了</p>
+                  <button
+                    onClick={() => setActiveStep("review")}
+                    className="text-sm text-green-700 underline mt-0.5"
+                  >
+                    議事録を確認する →
+                  </button>
+                </div>
+              </div>
+            ) : summarizing ? (
+              <div className="bg-purple-50 border border-purple-200 rounded-xl p-6 text-center">
+                <Spinner className="w-10 h-10 text-purple-600 mx-auto mb-3" />
+                <p className="text-sm font-medium text-purple-800">議事録を生成中...</p>
+                <p className="text-xs text-purple-600 mt-1">
+                  Ollama による処理中です（数分かかる場合があります）
+                </p>
+                <div className="mt-4 bg-purple-100 rounded-lg p-3">
+                  <p className="text-xs text-purple-700">
+                    処理中はこの画面を開いたままにしてください
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Ollama 注意書き */}
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                  <div className="flex items-start gap-3">
+                    <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <div>
+                      <p className="text-sm font-medium text-amber-800">Ollama が必要です</p>
+                      <p className="text-xs text-amber-700 mt-1">
+                        事前に Ollama を起動し、llama3 または mistral モデルをダウンロードしてください。
+                      </p>
+                      <code className="text-xs bg-amber-100 px-2 py-0.5 rounded mt-1 inline-block">
+                        ollama serve &amp;&amp; ollama pull llama3
+                      </code>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleStartSummarization}
+                  className="btn-primary w-full py-3"
+                >
+                  <svg className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                  </svg>
+                  議事録を生成する
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ステップ 4: 議事録確認 */}
+        {activeStep === "review" && (
+          <div className="card">
+            <SummaryViewer
+              summary={summary}
+              recordingTitle={recording.title}
+            />
+            {recording.audio_status === "PENDING" && (
+              <div className="mt-6 pt-6 border-t border-gray-100">
+                <button
+                  onClick={() => setShowAudioDialog(true)}
+                  className="btn-secondary w-full"
+                >
+                  音声ファイルの取り扱いを決定する
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ステップ 5: 音声管理 */}
+        {activeStep === "audio" && (
+          <div className="card">
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">音声ファイルの管理</h2>
+            <p className="text-sm text-gray-600 mb-6">
+              個人情報保護の観点から、不要になった音声ファイルは削除することを推奨します。
+            </p>
+
+            {recording.audio_status === "DELETED" ? (
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 flex items-center gap-3">
+                <svg className="w-5 h-5 text-gray-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <p className="text-sm text-gray-700">音声ファイルは削除済みです</p>
+              </div>
+            ) : recording.audio_status === "RETAINED" ? (
+              <div className="space-y-4">
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center gap-3">
+                  <svg className="w-5 h-5 text-blue-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <p className="text-sm text-blue-700">音声ファイルを保持しています</p>
+                </div>
+                <button
+                  onClick={() => setShowAudioDialog(true)}
+                  className="btn-danger w-full"
+                >
+                  音声ファイルを削除する
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowAudioDialog(true)}
+                className="btn-primary w-full py-3"
+              >
+                音声ファイルの取り扱いを決定する
+              </button>
+            )}
+          </div>
+        )}
+      </main>
+
+      {/* 音声削除ダイアログ */}
+      <AudioDeleteDialog
+        isOpen={showAudioDialog}
+        recordingTitle={recording.title}
+        onDelete={handleDeleteAudio}
+        onRetain={handleRetainAudio}
+        onDefer={() => setShowAudioDialog(false)}
+      />
+    </div>
+  );
+}
+
+function Spinner({ className }: { className?: string }) {
+  return (
+    <svg className={`animate-spin ${className ?? "w-5 h-5"}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+    </svg>
+  );
+}
