@@ -20,11 +20,20 @@ logger = logging.getLogger(__name__)
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_GENERATE_URL = f"{OLLAMA_BASE_URL}/api/generate"
 
-# 使用するモデル（llama3 または mistral）
-DEFAULT_MODEL = "llama3"
+# 使用するモデル
+DEFAULT_MODEL = "qwen2.5:14b"
 
 # チャンク分割の目安トークン数（約1,000トークン ≈ 1,500〜2,000文字）
 CHUNK_CHAR_SIZE = 2000
+
+# 要約結果を日本語に固定するためのシステムプロンプト
+JAPANESE_ONLY_SYSTEM_PROMPT = """あなたは日本語の議事録作成アシスタントです。
+応答は必ず自然な日本語で出力してください。
+中国語、韓国語、英語など、日本語以外の本文を出力してはいけません。
+入力に他言語が含まれる場合も、日本語に翻訳・要約して返してください。
+固有名詞、製品名、API 名、URL、コードは必要に応じて原文のままで構いません。
+Markdown が求められている場合は、Markdown の構造を維持してください。
+"""
 
 # ThreadPoolExecutor（Ollama 呼び出し用）
 _executor = ThreadPoolExecutor(max_workers=1)
@@ -98,13 +107,18 @@ def _split_text_into_chunks(text: str, chunk_size: int = CHUNK_CHAR_SIZE) -> lis
     return chunks
 
 
-def _call_ollama(prompt: str, model: str = DEFAULT_MODEL) -> str:
+def _call_ollama(
+    prompt: str,
+    model: str = DEFAULT_MODEL,
+    system_prompt: str = JAPANESE_ONLY_SYSTEM_PROMPT,
+) -> str:
     """
     Ollama API を同期呼び出しする（ThreadPoolExecutor から実行）。
 
     Args:
         prompt: プロンプトテキスト
         model: 使用モデル名
+        system_prompt: システムプロンプト
 
     Returns:
         str: 生成テキスト
@@ -117,6 +131,7 @@ def _call_ollama(prompt: str, model: str = DEFAULT_MODEL) -> str:
     payload = {
         "model": model,
         "prompt": prompt,
+        "system": system_prompt,
         "stream": False,
         "options": {
             "temperature": 0.3,   # 議事録向けに低温度（確定的な出力）
@@ -158,6 +173,11 @@ def _summarize_chunk(chunk: str, chunk_index: int, total_chunks: int, model: str
 このテキストの重要な内容を日本語で簡潔に要約してください。
 議論された内容、決定事項、アクションアイテムがあれば必ず含めてください。
 
+出力ルール:
+- 本文は必ず日本語で書く
+- 中国語、韓国語、英語の文章を出力しない
+- 固有名詞や製品名は必要に応じて原文のままでよい
+
 --- テキスト ---
 {chunk}
 --- ここまで ---
@@ -195,6 +215,11 @@ def _generate_final_minutes(
 これらの要約を統合して、以下の Markdown テンプレートに従った正式な議事録を作成してください。
 各セクションを適切に埋めてください。情報がない場合は「（記録なし）」と記載してください。
 
+出力ルール:
+- 議事録本文は必ず自然な日本語で記載する
+- 中国語、韓国語、英語の文章を出力しない
+- Markdown の見出しと箇条書きを維持する
+
 --- 要約 ---
 {summaries_text}
 --- ここまで ---
@@ -218,6 +243,38 @@ def _generate_final_minutes(
 ## その他・備考
 
 議事録（Markdown形式）:"""
+
+    return _call_ollama(prompt, model)
+
+
+def _normalize_minutes_to_japanese(minutes_markdown: str, model: str) -> str:
+    """
+    最終議事録を自然な日本語に統一する。
+    モデルが一部を中国語・韓国語・英語で返した場合でも、
+    Markdown 構造を保ったまま日本語へ正規化する。
+
+    Args:
+        minutes_markdown: 生成済みの議事録 Markdown
+        model: 使用モデル名
+
+    Returns:
+        str: 日本語に統一された議事録 Markdown
+    """
+    prompt = f"""以下の議事録を、意味と Markdown 構造を保ったまま自然な日本語に統一してください。
+
+出力ルール:
+- 本文は必ず日本語で出力する
+- 中国語、韓国語、英語の文章があれば日本語に翻訳する
+- 見出し、箇条書き、Markdown 記法は維持する
+- セクションの追加・削除・並べ替えはしない
+- 固有名詞、製品名、API 名、URL、コードは必要に応じて原文のままでよい
+- 余計な前置きや説明は付けず、議事録本文だけを返す
+
+--- 議事録 ---
+{minutes_markdown}
+--- ここまで ---
+
+日本語に統一した議事録（Markdown形式）:"""
 
     return _call_ollama(prompt, model)
 
@@ -259,6 +316,8 @@ def _run_summarization(
     # ステップ2: 統合要約 → 最終議事録生成
     logger.info("最終議事録を生成中...")
     final_minutes = _generate_final_minutes(chunk_summaries, title, meeting_date, model)
+    logger.info("議事録の出力言語を日本語に正規化中...")
+    final_minutes = _normalize_minutes_to_japanese(final_minutes, model)
 
     return final_minutes
 

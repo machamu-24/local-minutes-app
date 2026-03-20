@@ -38,18 +38,32 @@ def get_whisper_model():
     if _whisper_model is None:
         try:
             from faster_whisper import WhisperModel
-            logger.info("Whisper モデルをロード中（初回は数分かかる場合があります）...")
-            _whisper_model = WhisperModel(
-                "medium",
-                device="cpu",
-                compute_type="int8",
-            )
-            logger.info("Whisper モデルのロード完了")
-        except ImportError:
+        except ModuleNotFoundError as exc:
+            missing_pkg = exc.name or "unknown"
+            if missing_pkg == "faster_whisper":
+                raise RuntimeError(
+                    "faster-whisper がインストールされていません。"
+                    "pip install -r backend/requirements.txt を実行してください。"
+                ) from exc
             raise RuntimeError(
-                "faster-whisper がインストールされていません。"
-                "pip install faster-whisper を実行してください。"
-            )
+                f"faster-whisper の依存パッケージ '{missing_pkg}' が不足しています。"
+                "仮想環境を再作成するか、"
+                "pip install -r backend/requirements.txt を実行してください。"
+            ) from exc
+        except ImportError as exc:
+            raise RuntimeError(
+                f"faster-whisper の読み込みに失敗しました: {exc}. "
+                "仮想環境を再作成するか、"
+                "pip install -r backend/requirements.txt を実行してください。"
+            ) from exc
+
+        logger.info("Whisper モデルをロード中（初回は数分かかる場合があります）...")
+        _whisper_model = WhisperModel(
+            "medium",
+            device="cpu",
+            compute_type="int8",
+        )
+        logger.info("Whisper モデルのロード完了")
     return _whisper_model
 
 

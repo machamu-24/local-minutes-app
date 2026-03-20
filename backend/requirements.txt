@@ -10,6 +10,7 @@ sqlalchemy==2.0.36
 
 # HTTP クライアント（Ollama 連携）
 httpx==0.28.1
+requests>=2.31,<3
 
 # 音声文字起こし（CPU/int8 量子化）
 faster-whisper==1.1.0
