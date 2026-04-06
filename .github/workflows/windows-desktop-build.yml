@@ -90,9 +90,33 @@ jobs:
       - name: Smoke test desktop app startup
         shell: pwsh
         run: |
-          $appPath = "src-tauri/target/release/local-minutes-app.exe"
-          if (-not (Test-Path $appPath)) {
-            throw "missing desktop executable: $appPath"
+          $installer = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*.exe" |
+            Select-Object -First 1
+
+          if (-not $installer) {
+            throw "missing NSIS installer under src-tauri/target/release/bundle/nsis"
+          }
+
+          $installDir = Join-Path $env:RUNNER_TEMP "local-minutes-smoke"
+          if (Test-Path $installDir) {
+            Remove-Item -Path $installDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $installDir | Out-Null
+
+          $installProc = Start-Process -FilePath $installer.FullName -ArgumentList "/S", "/D=$installDir" -PassThru -Wait
+          if ($installProc.ExitCode -ne 0) {
+            throw "silent install failed with exit code $($installProc.ExitCode)"
+          }
+
+          $appPath = Get-ChildItem -Path $installDir -Recurse -Filter "*.exe" |
+            Where-Object {
+              $_.Name -notmatch "uninstall|backend|llama"
+            } |
+            Select-Object -First 1 -ExpandProperty FullName
+
+          if (-not $appPath) {
+            Get-ChildItem -Path $installDir -Recurse | Select-Object FullName | Format-Table -AutoSize
+            throw "could not locate installed desktop executable"
           }
 
           $healthUrl = "http://127.0.0.1:8010/api/health"
@@ -104,7 +128,7 @@ jobs:
           try {
             $healthy = $false
 
-            for ($attempt = 0; $attempt -lt 30; $attempt++) {
+            for ($attempt = 0; $attempt -lt 45; $attempt++) {
               Start-Sleep -Seconds 2
 
               if ($proc.HasExited) {
@@ -122,6 +146,9 @@ jobs:
             }
 
             if (-not $healthy) {
+              Write-Host "installed app path: $appPath"
+              Get-Process "local-minutes-backend" -ErrorAction SilentlyContinue
+              Get-Process "llama-server" -ErrorAction SilentlyContinue
               throw "backend health check did not pass via $healthUrl"
             }
           } finally {
@@ -134,6 +161,7 @@ jobs:
           }
 
       - name: Upload desktop bundle
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: local-minutes-windows-bundle
