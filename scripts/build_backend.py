@@ -74,6 +74,19 @@ def executable_suffix(target_triple: str) -> str:
     return ".exe" if "windows" in target_triple else ""
 
 
+def resolve_python_executable(path_value: str) -> Path:
+    candidate = Path(path_value)
+    if candidate.exists():
+        return candidate
+
+    if os.name == "nt" and not candidate.suffix:
+        candidate_with_exe = candidate.with_suffix(".exe")
+        if candidate_with_exe.exists():
+            return candidate_with_exe
+
+    raise FileNotFoundError(f"python executable not found: {candidate}")
+
+
 def parse_args() -> argparse.Namespace:
     repo_root = Path(__file__).resolve().parents[1]
     default_python = (
@@ -110,9 +123,7 @@ def main() -> int:
     spec_dir = backend_dir / "build" / "pyinstaller-spec"
     config_dir = backend_dir / "build" / "pyinstaller-config"
 
-    python_executable = Path(args.python)
-    if not python_executable.exists():
-        raise FileNotFoundError(f"python executable not found: {python_executable}")
+    python_executable = resolve_python_executable(args.python)
     if not launcher_path.exists():
         raise FileNotFoundError(f"backend launcher not found: {launcher_path}")
 

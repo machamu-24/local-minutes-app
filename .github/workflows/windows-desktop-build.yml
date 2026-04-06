@@ -57,13 +57,13 @@ jobs:
 
       - name: Install backend dependencies
         run: |
-          backend/.venv/Scripts/python -m pip install --upgrade pip
-          backend/.venv/Scripts/python -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
+          backend/.venv/Scripts/python.exe -m pip install --upgrade pip
+          backend/.venv/Scripts/python.exe -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
 
       - name: Build backend executable
         run: |
-          backend/.venv/Scripts/python scripts/build_backend.py \
-            --python backend/.venv/Scripts/python \
+          backend/.venv/Scripts/python.exe scripts/build_backend.py \
+            --python backend/.venv/Scripts/python.exe \
             --target-triple x86_64-pc-windows-msvc
 
       - name: Build llama-server
