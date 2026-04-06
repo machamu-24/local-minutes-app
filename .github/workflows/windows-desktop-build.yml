@@ -66,6 +66,49 @@ jobs:
             --python backend/.venv/Scripts/python.exe \
             --target-triple x86_64-pc-windows-msvc
 
+      - name: Smoke test backend executable
+        shell: pwsh
+        run: |
+          $backendPath = "src-tauri/binaries/local-minutes-backend-x86_64-pc-windows-msvc.exe"
+          if (-not (Test-Path $backendPath)) {
+            throw "missing backend executable: $backendPath"
+          }
+
+          $healthUrl = "http://127.0.0.1:8011/api/health"
+          $env:LOCAL_MINUTES_API_PORT = "8011"
+          $env:LOCAL_MINUTES_APP_DATA_DIR = Join-Path $env:RUNNER_TEMP "local-minutes-backend-smoke"
+
+          $proc = Start-Process -FilePath $backendPath -PassThru
+
+          try {
+            $healthy = $false
+
+            for ($attempt = 0; $attempt -lt 45; $attempt++) {
+              Start-Sleep -Seconds 2
+
+              if ($proc.HasExited) {
+                throw "backend executable exited early with code $($proc.ExitCode)"
+              }
+
+              try {
+                $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5
+                if ($health.status -eq "ok") {
+                  $healthy = $true
+                  break
+                }
+              } catch {
+              }
+            }
+
+            if (-not $healthy) {
+              throw "backend executable health check did not pass via $healthUrl"
+            }
+          } finally {
+            if ($proc -and -not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force
+            }
+          }
+
       - name: Build llama-server
         run: |
           LLAMA_DIR="$RUNNER_TEMP/llama.cpp"
@@ -108,9 +151,12 @@ jobs:
             throw "silent install failed with exit code $($installProc.ExitCode)"
           }
 
-          $appPath = Get-ChildItem -Path $installDir -Recurse -Filter "*.exe" |
+          $exeCandidates = Get-ChildItem -Path $installDir -Recurse -Filter "*.exe"
+          $exeCandidates | Select-Object FullName, Name | Format-Table -AutoSize
+
+          $appPath = $exeCandidates |
             Where-Object {
-              $_.Name -notmatch "uninstall|backend|llama"
+              $_.Name -in @("Local Minutes.exe", "local-minutes-app.exe", "app.exe")
             } |
             Select-Object -First 1 -ExpandProperty FullName
 
