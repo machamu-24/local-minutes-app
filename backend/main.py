@@ -5,6 +5,7 @@ FastAPI アプリケーションのエントリーポイント。
 """
 
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 
@@ -24,6 +25,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def runtime_host() -> str:
+    return os.getenv("LOCAL_MINUTES_API_HOST", "127.0.0.1")
+
+
+def runtime_port() -> str:
+    return os.getenv("LOCAL_MINUTES_API_PORT", "8000")
+
+
 # ─────────────────────────────────────────────
 # アプリケーションライフサイクル
 # ─────────────────────────────────────────────
@@ -37,7 +46,7 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("データベース初期化完了")
     logger.info("ローカル AI 議事録作成アプリ バックエンドが起動しました")
-    logger.info("API ドキュメント: http://127.0.0.1:8000/docs")
+    logger.info("API ドキュメント: http://%s:%s/docs", runtime_host(), runtime_port())
 
     yield
 
@@ -87,12 +96,14 @@ from .routers.recordings import router as recordings_router
 from .routers.transcripts import router as transcripts_router
 from .routers.summaries import router as summaries_router, status_router
 from .routers.jobs import router as jobs_router
+from .routers.runtime import router as runtime_router
 
-app.include_router(recordings_router)
-app.include_router(transcripts_router)
 app.include_router(summaries_router)
+app.include_router(transcripts_router)
+app.include_router(recordings_router)
 app.include_router(status_router)
 app.include_router(jobs_router)
+app.include_router(runtime_router)
 
 
 # ─────────────────────────────────────────────
@@ -118,8 +129,8 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "backend.main:app",
-        host="127.0.0.1",  # セキュリティ: ローカルホストのみバインド
-        port=8000,
+        host=runtime_host(),  # セキュリティ: ローカルホストのみバインド
+        port=int(runtime_port()),
         reload=True,
         log_level="info",
     )

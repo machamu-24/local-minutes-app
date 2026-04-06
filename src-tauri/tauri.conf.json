@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "local-minutes-app",
+  "productName": "Local Minutes",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.machamu.localminutes",
   "build": {
     "frontendDist": "../frontend/dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "local-minutes-app",
+        "title": "Local Minutes",
         "width": 800,
         "height": 600,
         "resizable": true,
@@ -26,6 +26,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/local-minutes-backend",
+      "binaries/llama-server"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -42,6 +42,11 @@ class Recording(Base):
         default="PENDING",
         comment="音声ファイル状態"
     )
+    last_summary_template_name = Column(
+        String(50),
+        nullable=True,
+        comment="最後に生成した議事録テンプレート名"
+    )
 
     created_at = Column(DateTime, default=datetime.utcnow, comment="作成日時")
     updated_at = Column(
@@ -108,6 +113,7 @@ class Summary(Base):
         String(50), nullable=False, default="general", comment="テンプレート名"
     )
     content_md = Column(Text, nullable=True, comment="Markdown形式の議事録")
+    prompt_snapshot = Column(Text, nullable=True, comment="要約時に使用したプロンプトスナップショット")
 
     # リレーション
     recording = relationship("Recording", back_populates="summaries")

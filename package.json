@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "cd frontend && pnpm dev",
+    "desktop:dev": "bash ./start-tauri.sh",
     "build": "cd frontend && pnpm build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

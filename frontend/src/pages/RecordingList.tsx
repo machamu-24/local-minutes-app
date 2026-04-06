@@ -2,7 +2,8 @@
  * RecordingList.tsx
  * 録音一覧画面（ホーム画面）。
  * - 録音のカード形式一覧表示
- * - 新規取り込みボタン（ファイル選択ダイアログ）
+ * - 音声ファイル取り込み
+ * - その場で録音して取り込み
  * - 各カードに会議名・日付・処理状態バッジを表示
  */
 
@@ -11,10 +12,21 @@ import { useNavigate } from "react-router-dom";
 import {
   getRecordings,
   importRecording,
+  deleteRecording,
   Recording,
   getStateLabel,
   getStateBadgeClass,
 } from "../api/client";
+import RecordingCaptureDialog from "../components/RecordingCaptureDialog";
+import RecordingDeleteDialog from "../components/RecordingDeleteDialog";
+import WhisperSettingsDialog from "../components/WhisperSettingsDialog";
+import {
+  getStoredWhisperModel,
+  setStoredWhisperModel,
+  WHISPER_MODEL_LABELS,
+} from "../lib/whisperSettings";
+
+const getTodayDateString = () => new Date().toISOString().split("T")[0];
 
 export default function RecordingList() {
   const navigate = useNavigate();
@@ -26,13 +38,15 @@ export default function RecordingList() {
 
   // インポートダイアログ状態
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showRecordingModal, setShowRecordingModal] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [importTitle, setImportTitle] = useState("");
-  const [importDate, setImportDate] = useState(
-    new Date().toISOString().split("T")[0]
-  );
+  const [importDate, setImportDate] = useState(getTodayDateString);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [recordingToDelete, setRecordingToDelete] = useState<Recording | null>(null);
+  const [showWhisperSettings, setShowWhisperSettings] = useState(false);
+  const [whisperModel, setWhisperModel] = useState(getStoredWhisperModel);
 
   // 録音一覧を取得
   const fetchRecordings = async () => {
@@ -64,6 +78,7 @@ export default function RecordingList() {
     const file = e.target.files?.[0];
     if (!file) return;
     setSelectedFile(file);
+    setImportDate(getTodayDateString());
     // ファイル名から会議名を自動入力（拡張子除去）
     const nameWithoutExt = file.name.replace(/\.[^/.]+$/, "");
     setImportTitle(nameWithoutExt);
@@ -71,19 +86,16 @@ export default function RecordingList() {
     setImportError(null);
   };
 
-  // 取り込み実行
-  const handleImport = async () => {
-    if (!selectedFile || !importTitle.trim()) {
-      setImportError("会議名を入力してください");
-      return;
-    }
+  const runImport = async (file: File, title: string, meetingDate?: string) => {
     setImporting(true);
     setImportError(null);
     try {
-      await importRecording(selectedFile, importTitle.trim(), importDate || undefined);
+      await importRecording(file, title, meetingDate || undefined);
       setShowImportModal(false);
+      setShowRecordingModal(false);
       setSelectedFile(null);
       setImportTitle("");
+      setImportDate(getTodayDateString());
       if (fileInputRef.current) fileInputRef.current.value = "";
       await fetchRecordings();
     } catch (e) {
@@ -93,20 +105,62 @@ export default function RecordingList() {
     }
   };
 
+  // 取り込み実行
+  const handleImport = async () => {
+    if (!selectedFile || !importTitle.trim()) {
+      setImportError("会議名を入力してください");
+      return;
+    }
+
+    await runImport(selectedFile, importTitle.trim(), importDate || undefined);
+  };
+
+  const handleRecordedImport = async (
+    file: File,
+    title: string,
+    meetingDate?: string
+  ) => {
+    await runImport(file, title, meetingDate);
+  };
+
+  const openImportModal = () => {
+    fileInputRef.current?.click();
+  };
+
+  const openRecordingModal = () => {
+    setImportError(null);
+    setShowRecordingModal(true);
+  };
+
   const handleModalClose = () => {
     if (importing) return;
     setShowImportModal(false);
     setSelectedFile(null);
     setImportTitle("");
+    setImportDate(getTodayDateString());
     setImportError(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleRecordingModalClose = () => {
+    if (importing) return;
+    setShowRecordingModal(false);
+    setImportError(null);
+    setImportDate(getTodayDateString());
+  };
+
+  const handleDeleteRecording = async () => {
+    if (!recordingToDelete) return;
+    await deleteRecording(recordingToDelete.id);
+    setRecordingToDelete(null);
+    await fetchRecordings();
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* ヘッダー */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
+        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-primary-600 flex items-center justify-center">
               <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -120,23 +174,61 @@ export default function RecordingList() {
             </div>
           </div>
 
-          {/* 新規取り込みボタン */}
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="btn-primary"
-          >
-            <svg className="w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-            新規取り込み
-          </button>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <button
+              onClick={() => navigate("/setup")}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300
+                         bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M4 7h16M7 12h10M10 17h4" />
+              </svg>
+              <span>初回セットアップ</span>
+            </button>
+
+            <button
+              onClick={() => setShowWhisperSettings(true)}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300
+                         bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M10.325 4.317a1 1 0 011.35-.936l.23.08a1 1 0 00.82 0l.23-.08a1 1 0 011.35.936l.03.241a1 1 0 00.607.792l.221.09a1 1 0 01.454 1.454l-.13.206a1 1 0 000 .975l.13.206a1 1 0 01-.454 1.454l-.221.09a1 1 0 00-.607.792l-.03.241a1 1 0 01-1.35.936l-.23-.08a1 1 0 00-.82 0l-.23.08a1 1 0 01-1.35-.936l-.03-.241a1 1 0 00-.607-.792l-.221-.09a1 1 0 01-.454-1.454l.13-.206a1 1 0 000-.975l-.13-.206a1 1 0 01.454-1.454l.221-.09a1 1 0 00.607-.792l.03-.241z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              <span className="hidden sm:inline">Whisper: {WHISPER_MODEL_LABELS[whisperModel]}</span>
+              <span className="sm:hidden">設定</span>
+            </button>
+
+            <button
+              onClick={openRecordingModal}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg
+                         bg-rose-600 text-white text-sm font-medium hover:bg-rose-700
+                         focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2
+                         transition-colors"
+            >
+              <span className="h-2.5 w-2.5 rounded-full bg-white/90" />
+              その場で録音
+            </button>
+
+            <button
+              onClick={openImportModal}
+              className="btn-primary"
+            >
+              <svg className="w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
+              新規取り込み
+            </button>
+          </div>
 
           {/* 非表示ファイル入力 */}
           <input
             ref={fileInputRef}
             type="file"
-            accept=".wav,.mp3,.m4a"
+            accept=".wav,.mp3,.m4a,.webm,.ogg,.mp4"
             className="hidden"
             onChange={handleFileSelect}
           />
@@ -177,7 +269,7 @@ export default function RecordingList() {
           </div>
         ) : recordings.length === 0 ? (
           /* 空状態 */
-          <EmptyState onImport={() => fileInputRef.current?.click()} />
+          <EmptyState onImport={openImportModal} onRecord={openRecordingModal} />
         ) : (
           /* 録音カード一覧 */
           <div className="space-y-3">
@@ -189,6 +281,7 @@ export default function RecordingList() {
                 key={recording.id}
                 recording={recording}
                 onClick={() => navigate(`/recordings/${recording.id}`)}
+                onDelete={() => setRecordingToDelete(recording)}
               />
             ))}
           </div>
@@ -209,6 +302,38 @@ export default function RecordingList() {
           onClose={handleModalClose}
         />
       )}
+
+      <RecordingCaptureDialog
+        isOpen={showRecordingModal}
+        defaultDate={importDate}
+        importing={importing}
+        importError={importError}
+        onSave={handleRecordedImport}
+        onClose={handleRecordingModalClose}
+      />
+
+      <RecordingDeleteDialog
+        isOpen={recordingToDelete !== null}
+        recordingTitle={recordingToDelete?.title ?? ""}
+        processingStateLabel={
+          recordingToDelete &&
+          ["TRANSCRIBING", "SUMMARIZING"].includes(recordingToDelete.state)
+            ? getStateLabel(recordingToDelete.state)
+            : null
+        }
+        onConfirm={handleDeleteRecording}
+        onClose={() => setRecordingToDelete(null)}
+      />
+
+      <WhisperSettingsDialog
+        isOpen={showWhisperSettings}
+        selectedModel={whisperModel}
+        onChangeModel={(model) => {
+          setWhisperModel(model);
+          setStoredWhisperModel(model);
+        }}
+        onClose={() => setShowWhisperSettings(false)}
+      />
     </div>
   );
 }
@@ -217,9 +342,11 @@ export default function RecordingList() {
 function RecordingCard({
   recording,
   onClick,
+  onDelete,
 }: {
   recording: Recording;
   onClick: () => void;
+  onDelete: () => void;
 }) {
   const isProcessing =
     recording.state === "TRANSCRIBING" || recording.state === "SUMMARIZING";
@@ -253,13 +380,15 @@ function RecordingCard({
   };
 
   return (
-    <button
-      onClick={onClick}
+    <div
       className="w-full text-left card hover:shadow-md hover:border-primary-200
                  transition-all duration-150 group"
     >
       <div className="flex items-start justify-between gap-4">
-        <div className="flex-1 min-w-0">
+        <button
+          onClick={onClick}
+          className="flex-1 min-w-0 text-left"
+        >
           {/* 会議名 */}
           <h2 className="text-base font-semibold text-gray-900 truncate group-hover:text-primary-700 transition-colors">
             {recording.title}
@@ -274,9 +403,9 @@ function RecordingCard({
               取り込み: {formatCreatedAt(recording.created_at)}
             </span>
           </div>
-        </div>
+        </button>
 
-        {/* 状態バッジ */}
+        {/* 状態バッジと削除 */}
         <div className="flex items-center gap-2 flex-shrink-0">
           {isProcessing && (
             <Spinner className="w-4 h-4 text-primary-600" />
@@ -288,6 +417,17 @@ function RecordingCard({
           >
             {getStateLabel(recording.state)}
           </span>
+          <button
+            onClick={onDelete}
+            className="p-2 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+            aria-label={`「${recording.title}」を削除`}
+            title="削除"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -301,12 +441,18 @@ function RecordingCard({
           音声ファイル削除済み
         </p>
       )}
-    </button>
+    </div>
   );
 }
 
 /** 空状態コンポーネント */
-function EmptyState({ onImport }: { onImport: () => void }) {
+function EmptyState({
+  onImport,
+  onRecord,
+}: {
+  onImport: () => void;
+  onRecord: () => void;
+}) {
   return (
     <div className="text-center py-16">
       <div className="w-16 h-16 rounded-2xl bg-primary-50 flex items-center justify-center mx-auto mb-4">
@@ -319,16 +465,28 @@ function EmptyState({ onImport }: { onImport: () => void }) {
         録音がありません
       </h2>
       <p className="text-sm text-gray-500 mb-6 max-w-xs mx-auto">
-        音声ファイル（wav / mp3 / m4a）を取り込んで、<br />
+        音声ファイルを取り込むか、その場で録音して、<br />
         AI による議事録作成を始めましょう。
       </p>
-      <button onClick={onImport} className="btn-primary">
-        <svg className="w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-        </svg>
-        音声ファイルを取り込む
-      </button>
+      <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+        <button
+          onClick={onRecord}
+          className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg
+                     bg-rose-600 text-white text-sm font-medium hover:bg-rose-700
+                     focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2
+                     transition-colors"
+        >
+          <span className="h-2.5 w-2.5 rounded-full bg-white/90" />
+          その場で録音する
+        </button>
+        <button onClick={onImport} className="btn-primary">
+          <svg className="w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+          </svg>
+          音声ファイルを取り込む
+        </button>
+      </div>
     </div>
   );
 }

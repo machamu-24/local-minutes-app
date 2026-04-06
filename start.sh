@@ -6,6 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_VENV="$SCRIPT_DIR/backend/.venv"
+BACKEND_PORT="8000"
 cd "$SCRIPT_DIR"
 
 install_backend_requirements() {
@@ -20,6 +21,26 @@ import importlib
 for name in ("fastapi", "uvicorn", "sqlalchemy", "httpx", "requests", "faster_whisper"):
     importlib.import_module(name)
 PY
+}
+
+backend_app_imports_ok() {
+  python3 - <<'PY'
+import traceback
+
+try:
+    import backend.main
+except Exception:
+    traceback.print_exc()
+    raise SystemExit(1)
+PY
+}
+
+backend_port_in_use() {
+  lsof -tiTCP:"$BACKEND_PORT" -sTCP:LISTEN > /dev/null 2>&1
+}
+
+print_backend_port_usage() {
+  lsof -nP -iTCP:"$BACKEND_PORT" -sTCP:LISTEN || true
 }
 
 echo "=========================================="
@@ -54,6 +75,11 @@ else
   fi
 fi
 
+if ! backend_app_imports_ok; then
+  echo "      バックエンドの起動前チェックに失敗しました"
+  exit 1
+fi
+
 # Ollama の起動確認
 echo "[2/3] Ollama の起動を確認しています..."
 if ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
@@ -67,6 +93,15 @@ fi
 
 # FastAPI バックエンドを起動
 echo "[3/3] バックエンドを起動しています..."
+
+if backend_port_in_use; then
+  echo "      127.0.0.1:$BACKEND_PORT は別プロセスが使用中です"
+  print_backend_port_usage
+  echo "      このアプリのバックエンドが既に起動しているか、別アプリが 8000 番ポートを使っています"
+  echo "      既存プロセスを停止するか、ポート競合を解消してから再実行してください"
+  exit 1
+fi
+
 echo ""
 echo "  API サーバー: http://127.0.0.1:8000"
 echo "  API ドキュメント: http://127.0.0.1:8000/docs"
@@ -74,13 +109,16 @@ echo ""
 echo "  フロントエンドは別ターミナルで以下を実行してください:"
 echo "  cd frontend && pnpm dev"
 echo ""
-echo "  または Tauri アプリとして起動する場合:"
+echo "  Tauri アプリまで一括で起動する場合:"
+echo "  ./start-tauri.sh"
+echo ""
+echo "  またはバックエンド起動後に別ターミナルで:"
 echo "  pnpm tauri dev"
 echo ""
 echo "  Ctrl+C で終了"
 echo "=========================================="
 
-python3 -m uvicorn backend.main:app \
+exec python3 -m uvicorn backend.main:app \
   --host 127.0.0.1 \
   --port 8000 \
   --reload \

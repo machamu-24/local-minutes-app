@@ -1,0 +1,140 @@
+name: windows-desktop-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
+      - "codex/**"
+    paths:
+      - ".github/workflows/windows-desktop-build.yml"
+      - "backend/**"
+      - "frontend/**"
+      - "src-tauri/**"
+      - "scripts/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        run: pnpm install --dir frontend --frozen-lockfile
+
+      - name: Create backend venv
+        run: python -m venv backend/.venv
+
+      - name: Install backend dependencies
+        run: |
+          backend/.venv/Scripts/python -m pip install --upgrade pip
+          backend/.venv/Scripts/python -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
+
+      - name: Build backend executable
+        run: |
+          backend/.venv/Scripts/python scripts/build_backend.py \
+            --python backend/.venv/Scripts/python \
+            --target-triple x86_64-pc-windows-msvc
+
+      - name: Build llama-server
+        run: |
+          LLAMA_DIR="$RUNNER_TEMP/llama.cpp"
+          rm -rf "$LLAMA_DIR"
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
+          cmake -S "$LLAMA_DIR" -B "$LLAMA_DIR/build" -DLLAMA_BUILD_SERVER=ON -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF
+          cmake --build "$LLAMA_DIR/build" --config Release --target llama-server
+          LLAMA_SERVER_PATH="$(find "$LLAMA_DIR/build" -name 'llama-server.exe' | head -n 1)"
+          test -n "$LLAMA_SERVER_PATH"
+          cp "$LLAMA_SERVER_PATH" src-tauri/binaries/llama-server-x86_64-pc-windows-msvc.exe
+
+      - name: Build Tauri desktop app
+        run: pnpm tauri build
+
+      - name: Inspect desktop bundle
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse src-tauri/target/release/bundle |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize
+
+      - name: Smoke test desktop app startup
+        shell: pwsh
+        run: |
+          $appPath = "src-tauri/target/release/local-minutes-app.exe"
+          if (-not (Test-Path $appPath)) {
+            throw "missing desktop executable: $appPath"
+          }
+
+          $healthUrl = "http://127.0.0.1:8010/api/health"
+          $env:LOCAL_MINUTES_TAURI_MANAGED_RUNTIME = "1"
+          $env:LOCAL_MINUTES_API_PORT = "8010"
+
+          $proc = Start-Process -FilePath $appPath -PassThru
+
+          try {
+            $healthy = $false
+
+            for ($attempt = 0; $attempt -lt 30; $attempt++) {
+              Start-Sleep -Seconds 2
+
+              if ($proc.HasExited) {
+                throw "desktop app exited early with code $($proc.ExitCode)"
+              }
+
+              try {
+                $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5
+                if ($health.status -eq "ok") {
+                  $healthy = $true
+                  break
+                }
+              } catch {
+              }
+            }
+
+            if (-not $healthy) {
+              throw "backend health check did not pass via $healthUrl"
+            }
+          } finally {
+            Get-Process "local-minutes-backend" -ErrorAction SilentlyContinue | Stop-Process -Force
+            Get-Process "llama-server" -ErrorAction SilentlyContinue | Stop-Process -Force
+
+            if ($proc -and -not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force
+            }
+          }
+
+      - name: Upload desktop bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-minutes-windows-bundle
+          path: src-tauri/target/release/bundle/**

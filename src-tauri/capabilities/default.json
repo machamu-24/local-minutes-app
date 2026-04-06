@@ -6,6 +6,23 @@
     "main"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "dialog:default",
+    "shell:allow-kill",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "binaries/local-minutes-backend",
+          "sidecar": true,
+          "args": true
+        },
+        {
+          "name": "binaries/llama-server",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
   ]
 }

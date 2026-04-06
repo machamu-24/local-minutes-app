@@ -15,22 +15,50 @@ import {
   getRecording,
   getTranscript,
   getSummary,
+  getSummaryTemplates,
   startTranscription,
   startSummarization,
   pollJobUntilDone,
+  deleteRecording,
   deleteAudio,
   retainAudio,
   Recording,
   Transcript,
   Summary,
+  SummaryTemplateOption,
   getStateLabel,
   getStateBadgeClass,
 } from "../api/client";
 import TranscriptEditor from "../components/TranscriptEditor";
 import SummaryViewer from "../components/SummaryViewer";
 import AudioDeleteDialog from "../components/AudioDeleteDialog";
+import RecordingDeleteDialog from "../components/RecordingDeleteDialog";
+import WhisperSettingsDialog from "../components/WhisperSettingsDialog";
+import {
+  getStoredWhisperModel,
+  setStoredWhisperModel,
+  WHISPER_MODEL_LABELS,
+} from "../lib/whisperSettings";
 
 type Step = "transcribe" | "edit" | "summarize" | "review" | "audio";
+
+const FALLBACK_SUMMARY_TEMPLATES: SummaryTemplateOption[] = [
+  {
+    name: "general",
+    label: "汎用議事録",
+    description: "標準的な会議向け。議題、主な議論、決定事項、TODO を整理します。",
+  },
+  {
+    name: "decision_log",
+    label: "決定事項重視",
+    description: "意思決定とその背景、未決事項を優先して整理します。",
+  },
+  {
+    name: "action_items",
+    label: "アクション重視",
+    description: "担当・期限・依存関係など、会議後の実務対応を追いやすく整理します。",
+  },
+];
 
 export default function RecordingDetail() {
   const { id } = useParams<{ id: string }>();
@@ -51,12 +79,26 @@ export default function RecordingDetail() {
 
   // 音声削除ダイアログ
   const [showAudioDialog, setShowAudioDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showWhisperSettings, setShowWhisperSettings] = useState(false);
+  const [whisperModel, setWhisperModel] = useState(getStoredWhisperModel);
+  const [summaryTemplates, setSummaryTemplates] = useState<SummaryTemplateOption[]>(
+    FALLBACK_SUMMARY_TEMPLATES
+  );
+  const [templateLoadError, setTemplateLoadError] = useState<string | null>(null);
+  const [selectedTemplateName, setSelectedTemplateName] = useState<string>(
+    FALLBACK_SUMMARY_TEMPLATES[0].name
+  );
+  const [customPrompt, setCustomPrompt] = useState("");
 
   // データ取得
   const fetchData = useCallback(async () => {
     try {
       const rec = await getRecording(recordingId);
       setRecording(rec);
+      if (rec.last_summary_template_name) {
+        setSelectedTemplateName(rec.last_summary_template_name);
+      }
 
       // 文字起こし結果を取得（存在する場合）
       if (["TRANSCRIBED", "SUMMARIZING", "DONE"].includes(rec.state)) {
@@ -71,8 +113,9 @@ export default function RecordingDetail() {
       // 要約結果を取得（存在する場合）
       if (rec.state === "DONE") {
         try {
-          const s = await getSummary(recordingId);
+          const s = await getSummary(recordingId, rec.last_summary_template_name ?? undefined);
           setSummary(s);
+          setSelectedTemplateName(s.template_name);
         } catch {
           // まだ存在しない場合は無視
         }
@@ -94,12 +137,38 @@ export default function RecordingDetail() {
     fetchData();
   }, [fetchData]);
 
+  useEffect(() => {
+    const loadSummaryTemplates = async () => {
+      try {
+        const templates = await getSummaryTemplates();
+        if (templates.length > 0) {
+          setSummaryTemplates(templates);
+        }
+        setTemplateLoadError(null);
+      } catch (e) {
+        setSummaryTemplates(FALLBACK_SUMMARY_TEMPLATES);
+        setTemplateLoadError(
+          e instanceof Error ? e.message : "テンプレート一覧の取得に失敗しました"
+        );
+      }
+    };
+
+    loadSummaryTemplates();
+  }, []);
+
+  useEffect(() => {
+    if (summaryTemplates.length === 0) return;
+    if (!summaryTemplates.some((template) => template.name === selectedTemplateName)) {
+      setSelectedTemplateName(summaryTemplates[0].name);
+    }
+  }, [selectedTemplateName, summaryTemplates]);
+
   // 文字起こし開始
   const handleStartTranscription = async () => {
     setTranscribing(true);
     setJobError(null);
     try {
-      const job = await startTranscription(recordingId);
+      const job = await startTranscription(recordingId, whisperModel);
       // ポーリングで完了を待つ
       const completedJob = await pollJobUntilDone(job.id);
       if (completedJob.status === "error") {
@@ -120,7 +189,10 @@ export default function RecordingDetail() {
     setSummarizing(true);
     setJobError(null);
     try {
-      const job = await startSummarization(recordingId);
+      const job = await startSummarization(recordingId, {
+        templateName: selectedTemplateName,
+        customPrompt,
+      });
       // ポーリングで完了を待つ
       const completedJob = await pollJobUntilDone(job.id, 5000);
       if (completedJob.status === "error") {
@@ -128,6 +200,7 @@ export default function RecordingDetail() {
       }
       // データを再取得
       await fetchData();
+      setCustomPrompt("");
       setActiveStep("review");
       // 完了後に音声削除ダイアログを表示
       setShowAudioDialog(true);
@@ -150,6 +223,11 @@ export default function RecordingDetail() {
     await retainAudio(recordingId);
     await fetchData();
     setShowAudioDialog(false);
+  };
+
+  const handleDeleteRecording = async () => {
+    await deleteRecording(recordingId);
+    navigate("/", { replace: true });
   };
 
   if (loading) {
@@ -250,29 +328,51 @@ export default function RecordingDetail() {
     } catch { return dateStr; }
   };
 
+  const selectedTemplate =
+    summaryTemplates.find((template) => template.name === selectedTemplateName) ??
+    summaryTemplates[0];
+  const currentSummaryTemplate = summaryTemplates.find(
+    (template) => template.name === summary?.template_name
+  );
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* ヘッダー */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-3xl mx-auto px-4 py-3">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => navigate("/")}
-              className="p-1.5 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
-            <div className="flex-1 min-w-0">
-              <h1 className="text-base font-bold text-gray-900 truncate">{recording.title}</h1>
-              <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-xs text-gray-500">{formatDate(recording.meeting_date)}</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getStateBadgeClass(recording.state)}`}>
-                  {getStateLabel(recording.state)}
-                </span>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <button
+                onClick={() => navigate("/")}
+                className="p-1.5 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <div className="flex-1 min-w-0">
+                <h1 className="text-base font-bold text-gray-900 truncate">{recording.title}</h1>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-xs text-gray-500">{formatDate(recording.meeting_date)}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getStateBadgeClass(recording.state)}`}>
+                    {getStateLabel(recording.state)}
+                  </span>
+                </div>
               </div>
             </div>
+            <button
+              onClick={() => setShowDeleteDialog(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200
+                         text-sm font-medium text-red-700 bg-white hover:bg-red-50
+                         focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2
+                         transition-colors flex-shrink-0"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              削除
+            </button>
           </div>
         </div>
       </header>
@@ -340,6 +440,26 @@ export default function RecordingDetail() {
               10〜15分の音声で数分〜10分程度かかります。
             </p>
 
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 mb-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Whisper モデル設定</p>
+                  <p className="text-sm text-gray-600 mt-1">
+                    現在の選択: <span className="font-semibold text-gray-900">{WHISPER_MODEL_LABELS[whisperModel]}</span>
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    `large` は精度重視、`large-v3-turbo` は旧 `turbo` と同じ系統です。
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowWhisperSettings(true)}
+                  className="btn-secondary flex-shrink-0"
+                >
+                  設定を変更
+                </button>
+              </div>
+            </div>
+
             {recording.state === "TRANSCRIBED" || recording.state === "DONE" ? (
               <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center gap-3">
                 <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -379,7 +499,7 @@ export default function RecordingDetail() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                     d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                文字起こしを開始する
+                {WHISPER_MODEL_LABELS[whisperModel]} で文字起こしを開始する
               </button>
             )}
           </div>
@@ -413,22 +533,7 @@ export default function RecordingDetail() {
               長文テキストは分割要約 → 統合要約の2段階で処理します。
             </p>
 
-            {recording.state === "DONE" ? (
-              <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center gap-3">
-                <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                <div>
-                  <p className="text-sm font-medium text-green-800">議事録生成完了</p>
-                  <button
-                    onClick={() => setActiveStep("review")}
-                    className="text-sm text-green-700 underline mt-0.5"
-                  >
-                    議事録を確認する →
-                  </button>
-                </div>
-              </div>
-            ) : summarizing ? (
+            {summarizing ? (
               <div className="bg-purple-50 border border-purple-200 rounded-xl p-6 text-center">
                 <Spinner className="w-10 h-10 text-purple-600 mx-auto mb-3" />
                 <p className="text-sm font-medium text-purple-800">議事録を生成中...</p>
@@ -443,6 +548,85 @@ export default function RecordingDetail() {
               </div>
             ) : (
               <div className="space-y-4">
+                {recording.state === "DONE" && summary && (
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-start gap-3">
+                    <svg className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    <div>
+                      <p className="text-sm font-medium text-green-800">議事録生成済み</p>
+                      <p className="text-xs text-green-700 mt-1">
+                        現在の議事録は「{currentSummaryTemplate?.label ?? summary.template_name}」で生成されています。
+                        下の条件で再生成できます。
+                      </p>
+                      <button
+                        onClick={() => setActiveStep("review")}
+                        className="text-sm text-green-700 underline mt-2"
+                      >
+                        議事録を確認する →
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {templateLoadError && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                    <p className="text-sm font-medium text-amber-800">テンプレート一覧の取得に失敗しました</p>
+                    <p className="text-xs text-amber-700 mt-1">
+                      {templateLoadError}
+                    </p>
+                    <p className="text-xs text-amber-700 mt-1">
+                      代替の既定テンプレートで続行できます。
+                    </p>
+                  </div>
+                )}
+
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-900 mb-2">
+                      テンプレート選択
+                    </label>
+                    <select
+                      value={selectedTemplateName}
+                      onChange={(e) => setSelectedTemplateName(e.target.value)}
+                      className="input"
+                    >
+                      {summaryTemplates.map((template) => (
+                        <option key={template.name} value={template.name}>
+                          {template.label}
+                        </option>
+                      ))}
+                    </select>
+                    {selectedTemplate && (
+                      <p className="text-xs text-gray-600 mt-2">
+                        {selectedTemplate.description}
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-900 mb-2">
+                      追加指示
+                    </label>
+                    <textarea
+                      value={customPrompt}
+                      onChange={(e) => setCustomPrompt(e.target.value)}
+                      rows={6}
+                      maxLength={4000}
+                      className="textarea"
+                      placeholder="例: 決定事項は箇条書きで明確に整理し、TODO には担当者と期限を必ず残してください。"
+                    />
+                    <div className="flex items-center justify-between mt-2 gap-4">
+                      <p className="text-xs text-gray-500">
+                        今回の生成にだけ適用します。使用した指示文面は再現性確保のため議事録結果に保存されます。
+                      </p>
+                      <span className="text-xs text-gray-400 flex-shrink-0">
+                        {customPrompt.length.toLocaleString()} / 4,000
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Ollama 注意書き */}
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
                   <div className="flex items-start gap-3">
@@ -470,7 +654,7 @@ export default function RecordingDetail() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                       d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                   </svg>
-                  議事録を生成する
+                  {recording.state === "DONE" ? "この条件で議事録を再生成する" : "議事録を生成する"}
                 </button>
               </div>
             )}
@@ -547,6 +731,28 @@ export default function RecordingDetail() {
         onDelete={handleDeleteAudio}
         onRetain={handleRetainAudio}
         onDefer={() => setShowAudioDialog(false)}
+      />
+
+      <RecordingDeleteDialog
+        isOpen={showDeleteDialog}
+        recordingTitle={recording.title}
+        processingStateLabel={
+          ["TRANSCRIBING", "SUMMARIZING"].includes(recording.state)
+            ? getStateLabel(recording.state)
+            : null
+        }
+        onConfirm={handleDeleteRecording}
+        onClose={() => setShowDeleteDialog(false)}
+      />
+
+      <WhisperSettingsDialog
+        isOpen={showWhisperSettings}
+        selectedModel={whisperModel}
+        onChangeModel={(model) => {
+          setWhisperModel(model);
+          setStoredWhisperModel(model);
+        }}
+        onClose={() => setShowWhisperSettings(false)}
       />
     </div>
   );

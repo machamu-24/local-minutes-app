@@ -1,19 +1,23 @@
 """
 services/audio.py
 ffmpeg を使用した音声前処理サービス。
-対応形式: wav, mp3, m4a
+対応形式: wav, mp3, m4a, webm, ogg, mp4
 変換後: 16kHz / mono / WAV 形式でアプリ専用ディレクトリに保存する。
 外部通信は一切行わない（ローカル処理のみ）。
 """
 
 import os
+import shutil
 import subprocess
 import uuid
 import logging
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".webm", ".ogg", ".mp4"}
+SUPPORTED_AUDIO_FORMATS_TEXT = "wav, mp3, m4a, webm, ogg, mp4"
 
 
 def get_audio_dir() -> Path:
@@ -25,10 +29,54 @@ def get_audio_dir() -> Path:
     return AUDIO_DIR
 
 
+def get_ffmpeg_executable() -> str:
+    """
+    ffmpeg 実行ファイルのパスを返す。
+    優先順:
+    1. LOCAL_MINUTES_FFMPEG_PATH
+    2. imageio-ffmpeg が提供する同梱バイナリ
+    3. PATH 上の ffmpeg
+    """
+    configured = os.getenv("LOCAL_MINUTES_FFMPEG_PATH")
+    if configured:
+        return configured
+
+    try:
+        from imageio_ffmpeg import get_ffmpeg_exe
+
+        return get_ffmpeg_exe()
+    except Exception as exc:
+        logger.debug("imageio-ffmpeg の解決に失敗しました: %s", exc)
+
+    return "ffmpeg"
+
+
+def get_ffprobe_executable() -> Optional[str]:
+    """
+    ffprobe 実行ファイルのパスを返す。未解決の場合は None。
+    """
+    configured = os.getenv("LOCAL_MINUTES_FFPROBE_PATH")
+    if configured:
+        return configured
+
+    if resolved := shutil.which("ffprobe"):
+        return resolved
+
+    ffmpeg_path = os.getenv("LOCAL_MINUTES_FFMPEG_PATH")
+    if ffmpeg_path:
+        ffmpeg_dir = Path(ffmpeg_path).expanduser().parent
+        probe_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+        candidate = ffmpeg_dir / probe_name
+        if candidate.exists():
+            return str(candidate)
+
+    return None
+
+
 def validate_audio_format(file_path: str) -> bool:
     """
     音声ファイルの形式を検証する。
-    対応形式: wav, mp3, m4a
+    対応形式: wav, mp3, m4a, webm, ogg, mp4
 
     Args:
         file_path: 検証対象のファイルパス
@@ -36,9 +84,8 @@ def validate_audio_format(file_path: str) -> bool:
     Returns:
         bool: 対応形式であれば True
     """
-    supported_extensions = {".wav", ".mp3", ".m4a"}
     ext = Path(file_path).suffix.lower()
-    return ext in supported_extensions
+    return ext in SUPPORTED_AUDIO_EXTENSIONS
 
 
 def convert_to_wav(input_path: str, output_filename: str = None) -> Tuple[str, str]:
@@ -66,7 +113,7 @@ def convert_to_wav(input_path: str, output_filename: str = None) -> Tuple[str, s
     # 形式検証
     if not validate_audio_format(input_path):
         raise ValueError(
-            f"非対応の音声形式です。対応形式: wav, mp3, m4a / 指定ファイル: {input_path}"
+            f"非対応の音声形式です。対応形式: {SUPPORTED_AUDIO_FORMATS_TEXT} / 指定ファイル: {input_path}"
         )
 
     # 出力ファイルパスの決定
@@ -85,7 +132,7 @@ def convert_to_wav(input_path: str, output_filename: str = None) -> Tuple[str, s
     # -f wav: WAV 形式で出力
     # -y: 上書き確認なし
     cmd = [
-        "ffmpeg",
+        get_ffmpeg_executable(),
         "-i", input_path,
         "-ar", "16000",
         "-ac", "1",
@@ -118,8 +165,8 @@ def convert_to_wav(input_path: str, output_filename: str = None) -> Tuple[str, s
     except FileNotFoundError:
         logger.error("ffmpeg がインストールされていません")
         raise RuntimeError(
-            "ffmpeg がインストールされていません。"
-            "macOS の場合: brew install ffmpeg"
+            "ffmpeg 実行ファイルを解決できませんでした。"
+            "LOCAL_MINUTES_FFMPEG_PATH を確認してください。"
         )
 
 
@@ -162,8 +209,12 @@ def get_audio_duration(file_path: str) -> float:
         float: 音声長さ（秒）、取得失敗時は -1.0
     """
     try:
+        ffprobe_path = get_ffprobe_executable()
+        if not ffprobe_path:
+            return -1.0
+
         cmd = [
-            "ffprobe",
+            ffprobe_path,
             "-v", "error",
             "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1",

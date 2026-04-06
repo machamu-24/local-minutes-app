@@ -9,10 +9,11 @@ import json
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import Optional, Literal
 from sqlalchemy.orm import Session
 
 from ..models import Recording, Transcript, Job
+from ..database import WHISPER_MODELS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -20,22 +21,34 @@ logger = logging.getLogger(__name__)
 # max_workers=1 で同時実行数を制限（メモリ節約）
 _executor = ThreadPoolExecutor(max_workers=1)
 
+# サポート対象の Whisper モデル
+WhisperModelName = Literal["small", "medium", "large", "turbo", "large-v3-turbo"]
+DEFAULT_WHISPER_MODEL: WhisperModelName = "medium"
+SUPPORTED_WHISPER_MODELS: tuple[WhisperModelName, ...] = (
+    "small",
+    "medium",
+    "large",
+    "turbo",
+    "large-v3-turbo",
+)
+
 # Whisper モデルのシングルトン（初回ロード後はキャッシュ）
 _whisper_model = None
+_whisper_model_name: Optional[str] = None
 
 
-def get_whisper_model():
+def get_whisper_model(model_name: WhisperModelName = DEFAULT_WHISPER_MODEL):
     """
     faster-whisper モデルを取得する（遅延初期化・シングルトン）。
-    モデル: medium（精度と速度のバランス）
+    モデル: ユーザー設定に応じて切り替え
     デバイス: cpu（GPU なし環境）
     量子化: int8（メモリ節約・速度向上）
 
     Returns:
         WhisperModel インスタンス
     """
-    global _whisper_model
-    if _whisper_model is None:
+    global _whisper_model, _whisper_model_name
+    if _whisper_model is None or _whisper_model_name != model_name:
         try:
             from faster_whisper import WhisperModel
         except ModuleNotFoundError as exc:
@@ -57,17 +70,41 @@ def get_whisper_model():
                 "pip install -r backend/requirements.txt を実行してください。"
             ) from exc
 
-        logger.info("Whisper モデルをロード中（初回は数分かかる場合があります）...")
+        # モデル切り替え時は以前のインスタンスを解放しやすくする
+        if _whisper_model_name and _whisper_model_name != model_name:
+            logger.info(
+                "Whisper モデルを切り替えます: %s -> %s",
+                _whisper_model_name,
+                model_name,
+            )
+            _whisper_model = None
+
+        logger.info(
+            "Whisper モデルをロード中: %s（初回は数分かかる場合があります）...",
+            model_name,
+        )
         _whisper_model = WhisperModel(
-            "medium",
+            model_name,
             device="cpu",
             compute_type="int8",
+            download_root=str(WHISPER_MODELS_DIR),
         )
-        logger.info("Whisper モデルのロード完了")
+        _whisper_model_name = model_name
+        logger.info("Whisper モデルのロード完了: %s", model_name)
     return _whisper_model
 
 
-def _run_transcription(wav_path: str) -> dict:
+def ensure_whisper_model_available(
+    model_name: WhisperModelName = DEFAULT_WHISPER_MODEL,
+) -> str:
+    """
+    指定した Whisper モデルを取得・キャッシュ済みにする。
+    """
+    get_whisper_model(model_name)
+    return str(WHISPER_MODELS_DIR)
+
+
+def _run_transcription(wav_path: str, model_name: WhisperModelName) -> dict:
     """
     faster-whisper による文字起こし処理（同期実行）。
     ThreadPoolExecutor から呼び出される。
@@ -81,9 +118,9 @@ def _run_transcription(wav_path: str) -> dict:
             "segments": list  # タイムスタンプ付きセグメントリスト
         }
     """
-    model = get_whisper_model()
+    model = get_whisper_model(model_name)
 
-    logger.info(f"文字起こし開始: {wav_path}")
+    logger.info("文字起こし開始: %s (model=%s)", wav_path, model_name)
 
     segments_iter, info = model.transcribe(
         wav_path,
@@ -119,6 +156,7 @@ async def run_transcription_job(
     recording_id: int,
     job_id: int,
     wav_path: str,
+    model_name: WhisperModelName,
     db_session_factory,
 ) -> None:
     """
@@ -141,8 +179,17 @@ async def run_transcription_job(
 
         job.status = "running"
         recording = db.query(Recording).filter(Recording.id == recording_id).first()
-        if recording:
-            recording.state = "TRANSCRIBING"
+        if not recording:
+            logger.info(
+                "削除済み録音の文字起こしジョブを終了します: job_id=%s, recording_id=%s",
+                job_id,
+                recording_id,
+            )
+            db.delete(job)
+            db.commit()
+            return
+
+        recording.state = "TRANSCRIBING"
         db.commit()
 
         # ThreadPoolExecutor で同期処理を非同期実行
@@ -151,7 +198,31 @@ async def run_transcription_job(
             _executor,
             _run_transcription,
             wav_path,
+            model_name,
         )
+
+        # 実行中に録音が削除された場合は結果を保存しない
+        db.expire_all()
+        job = db.query(Job).filter(Job.id == job_id).first()
+        recording = db.query(Recording).filter(Recording.id == recording_id).first()
+        if not recording:
+            logger.info(
+                "削除済み録音の文字起こし結果を破棄します: job_id=%s, recording_id=%s",
+                job_id,
+                recording_id,
+            )
+            if job:
+                db.delete(job)
+                db.commit()
+            return
+
+        if not job:
+            logger.info(
+                "文字起こしジョブが削除済みのため結果保存をスキップします: job_id=%s, recording_id=%s",
+                job_id,
+                recording_id,
+            )
+            return
 
         # 文字起こし結果を DB に保存
         transcript = db.query(Transcript).filter(
@@ -175,7 +246,12 @@ async def run_transcription_job(
             recording.state = "TRANSCRIBED"
         db.commit()
 
-        logger.info(f"文字起こしジョブ完了: job_id={job_id}, recording_id={recording_id}")
+        logger.info(
+            "文字起こしジョブ完了: job_id=%s, recording_id=%s, model=%s",
+            job_id,
+            recording_id,
+            model_name,
+        )
 
     except Exception as e:
         logger.error(f"文字起こしジョブエラー: job_id={job_id} / {e}", exc_info=True)

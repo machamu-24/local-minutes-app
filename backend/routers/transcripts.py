@@ -9,13 +9,19 @@ routers/transcripts.py
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Body
 from sqlalchemy.orm import Session
 
 from ..database import get_db, SessionLocal
 from ..models import Recording, Transcript, Job
-from ..schemas import TranscriptResponse, TranscriptUpdate, JobResponse, MessageResponse
-from ..services.transcription import run_transcription_job
+from ..schemas import TranscriptResponse, TranscriptUpdate, JobResponse, TranscribeRequest
+from ..services.transcription import (
+    DEFAULT_WHISPER_MODEL,
+    SUPPORTED_WHISPER_MODELS,
+    run_transcription_job,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +32,23 @@ router = APIRouter(prefix="/api/recordings", tags=["transcripts"])
 async def start_transcription(
     recording_id: int,
     background_tasks: BackgroundTasks,
+    request: Optional[TranscribeRequest] = Body(default=None),
     db: Session = Depends(get_db),
 ):
     """
     文字起こしジョブを登録し、バックグラウンドで処理を開始する。
     HTTP 202 Accepted を返し、ジョブ ID でポーリング可能にする。
     """
+    model_name = request.model if request else DEFAULT_WHISPER_MODEL
+    if model_name not in SUPPORTED_WHISPER_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "未対応の Whisper モデルです。"
+                f"指定可能: {', '.join(SUPPORTED_WHISPER_MODELS)}"
+            ),
+        )
+
     # 録音の存在確認
     recording = db.query(Recording).filter(Recording.id == recording_id).first()
     if not recording:
@@ -67,10 +84,16 @@ async def start_transcription(
         recording_id=recording_id,
         job_id=job.id,
         wav_path=recording.wav_path,
+        model_name=model_name,
         db_session_factory=SessionLocal,
     )
 
-    logger.info(f"文字起こしジョブ登録: job_id={job.id}, recording_id={recording_id}")
+    logger.info(
+        "文字起こしジョブ登録: job_id=%s, recording_id=%s, model=%s",
+        job.id,
+        recording_id,
+        model_name,
+    )
     return job
 
 

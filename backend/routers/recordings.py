@@ -3,22 +3,21 @@ routers/recordings.py
 録音関連 API エンドポイント。
 - 音声ファイル取り込み・前処理
 - 録音一覧・詳細取得
+- 録音削除
 - 音声ファイル削除・保持
 """
 
-import asyncio
-import shutil
 import uuid
 import logging
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
-from ..database import get_db, SessionLocal, AUDIO_DIR
-from ..models import Recording, Job
+from ..database import get_db, AUDIO_DIR
+from ..models import Recording
 from ..schemas import (
     RecordingResponse,
     RecordingListResponse,
@@ -26,11 +25,31 @@ from ..schemas import (
     AudioRetainRequest,
     MessageResponse,
 )
-from ..services.audio import convert_to_wav, delete_audio_file
+from ..services.audio import (
+    SUPPORTED_AUDIO_EXTENSIONS,
+    SUPPORTED_AUDIO_FORMATS_TEXT,
+    convert_to_wav,
+    delete_audio_file,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/recordings", tags=["recordings"])
+
+
+def _delete_recording_files(recording: Recording) -> tuple[int, int]:
+    """
+    録音に紐づく保存済み音声ファイルを削除する。
+    同一パスは重複削除しない。
+    """
+    file_paths = {path for path in [recording.wav_path, recording.audio_path] if path}
+    deleted_files = 0
+
+    for path in file_paths:
+        if delete_audio_file(path):
+            deleted_files += 1
+
+    return deleted_files, len(file_paths)
 
 
 # ─────────────────────────────────────────────
@@ -67,14 +86,54 @@ def get_recording(recording_id: int, db: Session = Depends(get_db)):
     return recording
 
 
+@router.delete("/{recording_id}", response_model=MessageResponse)
+def delete_recording(recording_id: int, db: Session = Depends(get_db)):
+    """
+    録音を削除する。
+    関連する文字起こし・要約・ジョブは ORM の cascade でまとめて削除し、
+    保存済み音声ファイルはベストエフォートでクリーンアップする。
+    """
+    recording = db.query(Recording).filter(Recording.id == recording_id).first()
+    if not recording:
+        raise HTTPException(status_code=404, detail=f"録音 ID={recording_id} が見つかりません")
+
+    had_transcript = recording.transcript is not None
+    summary_count = len(recording.summaries)
+    job_count = len(recording.jobs)
+    deleted_files, total_files = _delete_recording_files(recording)
+    title = recording.title
+
+    db.delete(recording)
+    db.commit()
+
+    logger.info(
+        "録音削除完了: recording_id=%s, title=%s, transcript=%s, summaries=%s, jobs=%s, files=%s/%s",
+        recording_id,
+        title,
+        had_transcript,
+        summary_count,
+        job_count,
+        deleted_files,
+        total_files,
+    )
+    return MessageResponse(
+        message="録音データを削除しました",
+        detail=(
+            f"文字起こし: {'あり' if had_transcript else 'なし'} / "
+            f"議事録: {summary_count} 件 / "
+            f"ジョブ: {job_count} 件 / "
+            f"音声ファイル: {deleted_files}/{total_files} 件削除"
+        ),
+    )
+
+
 # ─────────────────────────────────────────────
 # 音声ファイル取り込み
 # ─────────────────────────────────────────────
 
 @router.post("/import", response_model=RecordingResponse, status_code=201)
 async def import_recording(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(..., description="音声ファイル（wav/mp3/m4a）"),
+    file: UploadFile = File(..., description="音声ファイル（wav/mp3/m4a/webm/ogg/mp4）"),
     title: str = Form(..., description="会議名"),
     meeting_date: Optional[str] = Form(None, description="会議日（YYYY-MM-DD）"),
     db: Session = Depends(get_db),
@@ -86,10 +145,10 @@ async def import_recording(
     # ファイル形式チェック
     filename = file.filename or ""
     ext = Path(filename).suffix.lower()
-    if ext not in {".wav", ".mp3", ".m4a"}:
+    if ext not in SUPPORTED_AUDIO_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"非対応の音声形式です。対応形式: wav, mp3, m4a / 受信: {ext}"
+            detail=f"非対応の音声形式です。対応形式: {SUPPORTED_AUDIO_FORMATS_TEXT} / 受信: {ext}"
         )
 
     # 会議日のパース

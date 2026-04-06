@@ -12,6 +12,9 @@ sqlalchemy==2.0.36
 httpx==0.28.1
 requests>=2.31,<3
 
+# ffmpeg バイナリ同梱ヘルパー
+imageio-ffmpeg==0.6.0
+
 # 音声文字起こし（CPU/int8 量子化）
 faster-whisper==1.1.0
 

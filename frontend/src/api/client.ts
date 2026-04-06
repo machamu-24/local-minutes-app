@@ -19,6 +19,43 @@ export const apiClient = axios.create({
   },
 });
 
+const formatApiErrorMessage = (detail: unknown): string | null => {
+  if (typeof detail === "string" && detail.trim()) {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object" && "msg" in item) {
+          const message = item.msg;
+          return typeof message === "string" ? message : null;
+        }
+        return null;
+      })
+      .filter((message): message is string => Boolean(message));
+
+    if (messages.length > 0) {
+      return messages.join(" / ");
+    }
+  }
+
+  if (detail && typeof detail === "object") {
+    if ("message" in detail && typeof detail.message === "string") {
+      return detail.message;
+    }
+
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+};
+
 // レスポンスインターセプター（エラーハンドリング）
 apiClient.interceptors.response.use(
   (response) => response,
@@ -26,8 +63,8 @@ apiClient.interceptors.response.use(
     if (error.response) {
       // サーバーエラーレスポンス
       const message =
-        error.response.data?.detail ||
-        error.response.data?.message ||
+        formatApiErrorMessage(error.response.data?.detail) ||
+        formatApiErrorMessage(error.response.data?.message) ||
         `エラー: ${error.response.status}`;
       return Promise.reject(new Error(message));
     } else if (error.request) {
@@ -55,6 +92,7 @@ export interface Recording {
   wav_path: string | null;
   state: "IMPORTED" | "TRANSCRIBING" | "TRANSCRIBED" | "SUMMARIZING" | "DONE";
   audio_status: "PENDING" | "DELETED" | "RETAINED";
+  last_summary_template_name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -77,6 +115,18 @@ export interface Summary {
   recording_id: number;
   template_name: string;
   content_md: string | null;
+  prompt_snapshot: string | null;
+}
+
+export interface SummaryTemplateOption {
+  name: string;
+  label: string;
+  description: string;
+}
+
+export interface StartSummarizationParams {
+  templateName?: string;
+  customPrompt?: string;
 }
 
 export interface Job {
@@ -93,6 +143,22 @@ export interface MessageResponse {
   detail?: string;
 }
 
+export interface RuntimeEnvironment {
+  app_data_dir: string;
+  audio_dir: string;
+  whisper_models_dir: string;
+  ffmpeg_path: string;
+  ffprobe_path: string | null;
+  default_whisper_model: WhisperModel;
+  supported_whisper_models: WhisperModel[];
+}
+
+export type WhisperModel =
+  | "small"
+  | "medium"
+  | "large"
+  | "large-v3-turbo";
+
 // ─────────────────────────────────────────────
 // API 関数
 // ─────────────────────────────────────────────
@@ -106,6 +172,16 @@ export const getRecordings = async (): Promise<RecordingListResponse> => {
 /** 録音詳細取得 */
 export const getRecording = async (id: number): Promise<Recording> => {
   const res = await apiClient.get<Recording>(`/api/recordings/${id}`);
+  return res.data;
+};
+
+/** 録音削除 */
+export const deleteRecording = async (
+  recordingId: number
+): Promise<MessageResponse> => {
+  const res = await apiClient.delete<MessageResponse>(
+    `/api/recordings/${recordingId}`
+  );
   return res.data;
 };
 
@@ -127,9 +203,13 @@ export const importRecording = async (
 };
 
 /** 文字起こし開始 */
-export const startTranscription = async (recordingId: number): Promise<Job> => {
+export const startTranscription = async (
+  recordingId: number,
+  model: WhisperModel
+): Promise<Job> => {
   const res = await apiClient.post<Job>(
-    `/api/recordings/${recordingId}/transcribe`
+    `/api/recordings/${recordingId}/transcribe`,
+    { model }
   );
   return res.data;
 };
@@ -154,22 +234,40 @@ export const updateTranscript = async (
   return res.data;
 };
 
+/** 要約テンプレート一覧取得 */
+export const getSummaryTemplates = async (): Promise<SummaryTemplateOption[]> => {
+  const res = await apiClient.get<SummaryTemplateOption[]>(
+    "/api/recordings/summary-templates"
+  );
+  return res.data;
+};
+
 /** 要約生成開始 */
 export const startSummarization = async (
   recordingId: number,
-  templateName = "general"
+  params: StartSummarizationParams = {}
 ): Promise<Job> => {
+  const payload = {
+    template_name: params.templateName ?? "general",
+    custom_prompt: params.customPrompt?.trim() || undefined,
+  };
   const res = await apiClient.post<Job>(
     `/api/recordings/${recordingId}/summarize`,
-    { template_name: templateName }
+    payload
   );
   return res.data;
 };
 
 /** 要約結果取得 */
-export const getSummary = async (recordingId: number): Promise<Summary> => {
+export const getSummary = async (
+  recordingId: number,
+  templateName?: string
+): Promise<Summary> => {
   const res = await apiClient.get<Summary>(
-    `/api/recordings/${recordingId}/summary`
+    `/api/recordings/${recordingId}/summary`,
+    {
+      params: templateName ? { template_name: templateName } : undefined,
+    }
   );
   return res.data;
 };
@@ -211,6 +309,23 @@ export const healthCheck = async (): Promise<{ status: string }> => {
 /** Ollama 稼働状況確認 */
 export const getOllamaStatus = async () => {
   const res = await apiClient.get("/api/ollama/status");
+  return res.data;
+};
+
+/** Runtime 環境取得 */
+export const getRuntimeEnvironment = async (): Promise<RuntimeEnvironment> => {
+  const res = await apiClient.get<RuntimeEnvironment>("/api/runtime/status");
+  return res.data;
+};
+
+/** Whisper モデルの事前ダウンロード */
+export const prepareWhisperModel = async (
+  model: WhisperModel
+): Promise<MessageResponse> => {
+  const normalizedModel = model === "large-v3-turbo" ? "large-v3-turbo" : model;
+  const res = await apiClient.post<MessageResponse>("/api/runtime/whisper/prepare", {
+    model: normalizedModel,
+  });
   return res.data;
 };
 
