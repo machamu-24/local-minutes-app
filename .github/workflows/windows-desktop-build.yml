@@ -114,7 +114,7 @@ jobs:
           LLAMA_DIR="$RUNNER_TEMP/llama.cpp"
           rm -rf "$LLAMA_DIR"
           git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
-          cmake -S "$LLAMA_DIR" -B "$LLAMA_DIR/build" -DLLAMA_BUILD_SERVER=ON -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF
+          cmake -S "$LLAMA_DIR" -B "$LLAMA_DIR/build" -DLLAMA_BUILD_SERVER=ON -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF -DLLAMA_OPENSSL=OFF
           cmake --build "$LLAMA_DIR/build" --config Release --target llama-server
           LLAMA_SERVER_PATH="$(find "$LLAMA_DIR/build" -name 'llama-server.exe' | head -n 1)"
           test -n "$LLAMA_SERVER_PATH"
