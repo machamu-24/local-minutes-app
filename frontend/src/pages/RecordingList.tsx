@@ -27,6 +27,7 @@ import {
 } from "../lib/whisperSettings";
 
 const getTodayDateString = () => new Date().toISOString().split("T")[0];
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function RecordingList() {
   const navigate = useNavigate();
@@ -49,11 +50,32 @@ export default function RecordingList() {
   const [whisperModel, setWhisperModel] = useState(getStoredWhisperModel);
 
   // 録音一覧を取得
-  const fetchRecordings = async () => {
+  const fetchRecordings = async (options?: { startupRetry?: boolean }) => {
+    const maxAttempts = options?.startupRetry ? 20 : 1;
+
     try {
       setError(null);
-      const data = await getRecordings();
-      setRecordings(data.recordings);
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        try {
+          const data = await getRecordings();
+          setRecordings(data.recordings);
+          return;
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "録音一覧の取得に失敗しました";
+
+          const canRetry =
+            options?.startupRetry &&
+            message.includes("バックエンドサーバーに接続できません") &&
+            attempt + 1 < maxAttempts;
+
+          if (!canRetry) {
+            throw error;
+          }
+
+          await wait(1000);
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "録音一覧の取得に失敗しました");
     } finally {
@@ -62,7 +84,7 @@ export default function RecordingList() {
   };
 
   useEffect(() => {
-    fetchRecordings();
+    fetchRecordings({ startupRetry: true });
     // 処理中の録音がある場合は定期的に更新
     const interval = setInterval(() => {
       const hasProcessing = recordings.some(
@@ -249,7 +271,7 @@ export default function RecordingList() {
                 <p className="text-sm font-medium text-red-800">エラーが発生しました</p>
                 <p className="text-sm text-red-700 mt-1">{error}</p>
                 <button
-                  onClick={fetchRecordings}
+                  onClick={() => void fetchRecordings({ startupRetry: true })}
                   className="text-sm text-red-600 underline mt-2"
                 >
                   再試行

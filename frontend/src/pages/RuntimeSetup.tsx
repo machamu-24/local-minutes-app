@@ -192,7 +192,7 @@ export default function RuntimeSetup() {
   };
 
   const waitForBackendReady = async () => {
-    const maxAttempts = 30;
+    const maxAttempts = 90;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         await healthCheck();
