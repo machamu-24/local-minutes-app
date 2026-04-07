@@ -692,11 +692,11 @@ fn backend_environment(app: &AppHandle) -> Result<Vec<(String, String)>, String>
         ),
         (
             "LOCAL_MINUTES_API_HOST".to_string(),
-            BACKEND_HOST.to_string(),
+            env_or_default("LOCAL_MINUTES_API_HOST", BACKEND_HOST),
         ),
         (
             "LOCAL_MINUTES_API_PORT".to_string(),
-            BACKEND_PORT.to_string(),
+            env_or_default("LOCAL_MINUTES_API_PORT", BACKEND_PORT),
         ),
         (
             "LOCAL_MINUTES_APP_DATA_DIR".to_string(),
