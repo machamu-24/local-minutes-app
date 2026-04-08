@@ -11,6 +11,7 @@ import {
   getRuntimeStatus,
   isHttpUrl,
   isTauriRuntime,
+  listenSidecarStatus,
   listenSetupProgress,
   pickExecutablePath,
   pickModelPath,
@@ -19,6 +20,7 @@ import {
   RuntimeSetupStatus,
   RuntimeStatus,
   SetupProgressPayload,
+  SidecarStatusPayload,
 } from "../lib/tauriRuntimeSetup";
 import {
   getStoredWhisperModel,
@@ -35,6 +37,13 @@ const progressToneClass: Record<string, string> = {
   completed: "text-emerald-700 bg-emerald-50 border-emerald-200",
   skipped: "text-amber-700 bg-amber-50 border-amber-200",
   info: "text-gray-700 bg-gray-50 border-gray-200",
+};
+
+const sidecarToneClass: Record<string, string> = {
+  started: "text-emerald-700 bg-emerald-50 border-emerald-200",
+  stopped: "text-amber-700 bg-amber-50 border-amber-200",
+  error: "text-red-700 bg-red-50 border-red-200",
+  skipped: "text-gray-700 bg-gray-50 border-gray-200",
 };
 
 const installedBadgeClass = (installed: boolean) =>
@@ -73,6 +82,7 @@ export default function RuntimeSetup() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [progressEvents, setProgressEvents] = useState<SetupProgressPayload[]>([]);
+  const [sidecarEvents, setSidecarEvents] = useState<SidecarStatusPayload[]>([]);
 
   const [backendSource, setBackendSource] = useState("");
   const [llamaServerSource, setLlamaServerSource] = useState("");
@@ -96,6 +106,10 @@ export default function RuntimeSetup() {
   const latestProgress = useMemo(
     () => progressEvents[progressEvents.length - 1] ?? null,
     [progressEvents]
+  );
+  const latestSidecarEvent = useMemo(
+    () => sidecarEvents[sidecarEvents.length - 1] ?? null,
+    [sidecarEvents]
   );
 
   const applyStatusToForm = (nextStatus: RuntimeSetupStatus) => {
@@ -158,6 +172,32 @@ export default function RuntimeSetup() {
       .catch((e) => {
         if (!active) return;
         setError(e instanceof Error ? e.message : "進捗イベントの購読に失敗しました");
+      });
+
+    return () => {
+      active = false;
+      if (unlisten) {
+        void unlisten();
+      }
+    };
+  }, [tauriAvailable]);
+
+  useEffect(() => {
+    if (!tauriAvailable) return;
+
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    listenSidecarStatus((payload) => {
+      if (!active) return;
+      setSidecarEvents((current) => [...current, payload]);
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((e) => {
+        if (!active) return;
+        setError(e instanceof Error ? e.message : "sidecar 状態イベントの購読に失敗しました");
       });
 
     return () => {
@@ -237,6 +277,7 @@ export default function RuntimeSetup() {
     setError(null);
     setSuccessMessage(null);
     setProgressEvents([]);
+    setSidecarEvents([]);
 
     try {
       const nextStatus = await prepareRuntimeAssets({
@@ -722,6 +763,49 @@ export default function RuntimeSetup() {
                     <p className="font-medium text-gray-800">Config</p>
                     <p className="mt-1">{status?.runtimeConfigPath ?? "-"}</p>
                   </div>
+                </div>
+              </section>
+
+              <section className="card">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-base font-semibold text-gray-900">Sidecar 状態ログ</h2>
+                  {latestSidecarEvent && (
+                    <span className="text-xs text-gray-500">
+                      {latestSidecarEvent.sidecar} / {latestSidecarEvent.status}
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-4 space-y-3 max-h-[18rem] overflow-y-auto pr-1">
+                  {sidecarEvents.length === 0 ? (
+                    <p className="text-sm text-gray-500">
+                      まだ sidecar イベントはありません。runtime 起動時にここへ詳細が表示されます。
+                    </p>
+                  ) : (
+                    sidecarEvents.map((item, index) => (
+                      <div
+                        key={`${item.sidecar}-${item.status}-${item.pid ?? "no-pid"}-${index}`}
+                        className={`rounded-xl border p-3 ${sidecarToneClass[item.status] ?? sidecarToneClass.skipped}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-medium">
+                              {item.sidecar} / {item.status}
+                            </p>
+                            {item.pid !== null && (
+                              <p className="text-xs mt-1">pid: {item.pid}</p>
+                            )}
+                          </div>
+                          <span className="text-[11px] uppercase tracking-wide">
+                            {item.status}
+                          </span>
+                        </div>
+                        {item.detail && (
+                          <p className="text-xs mt-2 whitespace-pre-wrap break-all">{item.detail}</p>
+                        )}
+                      </div>
+                    ))
+                  )}
                 </div>
               </section>
 

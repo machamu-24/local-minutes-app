@@ -37,13 +37,22 @@ function AppRoutes() {
         }
 
         if (status.managedRuntimeEnabled) {
+          let backendReady = false;
           for (let attempt = 0; attempt < 45; attempt += 1) {
             try {
               await healthCheck();
+              backendReady = true;
               break;
             } catch {
               await wait(1000);
             }
+          }
+
+          // If sidecar startup failed on another machine, force the user into
+          // runtime setup instead of showing repeated backend connection errors.
+          if (!backendReady) {
+            navigate("/setup", { replace: true });
+            return;
           }
         }
       } catch {

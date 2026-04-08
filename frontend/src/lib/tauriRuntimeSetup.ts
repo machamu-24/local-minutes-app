@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 export const SETUP_PROGRESS_EVENT_NAME = "runtime://setup-progress";
+export const SIDECAR_STATUS_EVENT_NAME = "runtime://sidecar-status";
 
 export interface RuntimeStatus {
   managedRuntimeEnabled: boolean;
@@ -57,6 +58,13 @@ export interface SetupProgressPayload {
   totalBytes: number | null;
 }
 
+export interface SidecarStatusPayload {
+  sidecar: string;
+  status: string;
+  pid: number | null;
+  detail: string | null;
+}
+
 export const isTauriRuntime = (): boolean => isTauri();
 
 export const getRuntimeStatus = async (): Promise<RuntimeStatus> =>
@@ -77,6 +85,13 @@ export const listenSetupProgress = async (
   handler: (payload: SetupProgressPayload) => void
 ) =>
   listen<SetupProgressPayload>(SETUP_PROGRESS_EVENT_NAME, (event) => {
+    handler(event.payload);
+  });
+
+export const listenSidecarStatus = async (
+  handler: (payload: SidecarStatusPayload) => void
+) =>
+  listen<SidecarStatusPayload>(SIDECAR_STATUS_EVENT_NAME, (event) => {
     handler(event.payload);
   });
 
