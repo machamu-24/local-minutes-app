@@ -16,10 +16,10 @@ use tauri_plugin_shell::{
 };
 
 use crate::runtime_assets::{
-    bundled_sidecar_available, configured_llm_model_alias, installed_backend_path,
-    installed_llama_server_path, installed_model_path, prepare_runtime_assets, runtime_paths,
-    runtime_setup_status, PrepareRuntimeAssetsRequest, RuntimeSetupStatus, BACKEND_SIDECAR_NAME,
-    LLAMA_SIDECAR_NAME,
+    bundled_sidecar_available, configured_llm_model_alias, external_backend_source_configured,
+    external_llama_server_source_configured, installed_backend_path, installed_llama_server_path,
+    installed_model_path, prepare_runtime_assets, runtime_paths, runtime_setup_status,
+    PrepareRuntimeAssetsRequest, RuntimeSetupStatus, BACKEND_SIDECAR_NAME, LLAMA_SIDECAR_NAME,
 };
 
 const BACKEND_HOST: &str = "127.0.0.1";
@@ -290,6 +290,12 @@ fn spawn_llama_runtime(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    let prefer_external_binary = external_llama_server_source_configured(app)?;
+
+    if !prefer_external_binary && bundled_sidecar_available(app, LLAMA_SIDECAR_NAME) {
+        return spawn_llama_sidecar_fallback(app);
+    }
+
     if let Some(llama_server_path) = installed_llama_server_path(app)? {
         if let Some(model_path) = installed_model_path(app)? {
             return spawn_native_llama_process(app, llama_server_path, model_path);
@@ -302,6 +308,12 @@ fn spawn_llama_runtime(app: &AppHandle) -> Result<(), String> {
 fn spawn_backend_runtime(app: &AppHandle) -> Result<(), String> {
     if sidecar_running(app, ManagedSidecar::Backend) {
         return Ok(());
+    }
+
+    let prefer_external_binary = external_backend_source_configured(app)?;
+
+    if !prefer_external_binary && bundled_sidecar_available(app, BACKEND_SIDECAR_NAME) {
+        return spawn_backend_sidecar_fallback(app);
     }
 
     if let Some(backend_path) = installed_backend_path(app)? {

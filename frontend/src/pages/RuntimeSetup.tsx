@@ -364,9 +364,17 @@ export default function RuntimeSetup() {
     setOutputEvents([]);
 
     try {
+      const normalizedBackendSource =
+        backendSource.trim() || runtimeStatus?.bundledBackendAvailable
+          ? backendSource.trim()
+          : undefined;
+      const normalizedLlamaServerSource =
+        llamaServerSource.trim() || runtimeStatus?.bundledLlmAvailable
+          ? llamaServerSource.trim()
+          : undefined;
       const nextStatus = await prepareRuntimeAssets({
-        backendSource: backendSource.trim() || undefined,
-        llamaServerSource: llamaServerSource.trim() || undefined,
+        backendSource: normalizedBackendSource,
+        llamaServerSource: normalizedLlamaServerSource,
         llmModelUrl: activeModelSource.trim(),
         llmModelFilename: resolvedFilename,
         forceReplaceBinaries,

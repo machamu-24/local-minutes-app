@@ -152,9 +152,9 @@ pub fn runtime_setup_status(app: &AppHandle) -> Result<RuntimeSetupStatus, Strin
         llm_model_installed,
         llm_model_url,
         llm_model_alias: configured_llm_model_alias(),
-        ready_for_managed_runtime: backend_installed
-            && llama_server_installed
-            && llm_model_installed,
+        ready_for_managed_runtime: llm_model_installed
+            && (backend_installed || bundled_sidecar_available(app, BACKEND_SIDECAR_NAME))
+            && (llama_server_installed || bundled_sidecar_available(app, LLAMA_SIDECAR_NAME)),
     })
 }
 
@@ -185,6 +185,18 @@ pub fn installed_model_path(app: &AppHandle) -> Result<Option<PathBuf>, String> 
     }
 }
 
+pub fn external_backend_source_configured(app: &AppHandle) -> Result<bool, String> {
+    let paths = runtime_paths(app)?;
+    let config = read_runtime_config(&paths.config_path)?;
+    Ok(resolve_source(None, config.backend_source, "LOCAL_MINUTES_BACKEND_SOURCE").is_some())
+}
+
+pub fn external_llama_server_source_configured(app: &AppHandle) -> Result<bool, String> {
+    let paths = runtime_paths(app)?;
+    let config = read_runtime_config(&paths.config_path)?;
+    Ok(resolve_source(None, config.llama_server_source, "LOCAL_MINUTES_LLAMA_SERVER_SOURCE").is_some())
+}
+
 pub async fn prepare_runtime_assets(
     app: AppHandle,
     request: PrepareRuntimeAssetsRequest,
@@ -210,11 +222,19 @@ fn prepare_runtime_assets_blocking(
     let force_replace_binaries = request.force_replace_binaries.unwrap_or(false);
     let force_redownload = request.force_redownload.unwrap_or(false);
 
-    let llama_server_source = resolve_source(
-        request.llama_server_source,
-        config.llama_server_source.clone(),
-        "LOCAL_MINUTES_LLAMA_SERVER_SOURCE",
-    );
+    let clear_llama_server_source = request
+        .llama_server_source
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty());
+    let llama_server_source = if clear_llama_server_source {
+        None
+    } else {
+        resolve_source(
+            request.llama_server_source,
+            config.llama_server_source.clone(),
+            "LOCAL_MINUTES_LLAMA_SERVER_SOURCE",
+        )
+    };
     install_binary_if_needed(
         app,
         "llama-server",
@@ -223,15 +243,21 @@ fn prepare_runtime_assets_blocking(
         force_replace_binaries,
         Some(LLAMA_SIDECAR_NAME),
     )?;
-    if let Some(source) = llama_server_source {
-        config.llama_server_source = Some(source);
-    }
+    config.llama_server_source = llama_server_source;
 
-    let backend_source = resolve_source(
-        request.backend_source,
-        config.backend_source.clone(),
-        "LOCAL_MINUTES_BACKEND_SOURCE",
-    );
+    let clear_backend_source = request
+        .backend_source
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty());
+    let backend_source = if clear_backend_source {
+        None
+    } else {
+        resolve_source(
+            request.backend_source,
+            config.backend_source.clone(),
+            "LOCAL_MINUTES_BACKEND_SOURCE",
+        )
+    };
     install_binary_if_needed(
         app,
         "backend-exe",
@@ -240,9 +266,7 @@ fn prepare_runtime_assets_blocking(
         force_replace_binaries,
         Some(BACKEND_SIDECAR_NAME),
     )?;
-    if let Some(source) = backend_source {
-        config.backend_source = Some(source);
-    }
+    config.backend_source = backend_source;
 
     let llm_model_url = resolve_value(
         request.llm_model_url,
@@ -310,21 +334,6 @@ fn install_binary_if_needed(
     force_replace: bool,
     bundled_sidecar_name: Option<&str>,
 ) -> Result<(), String> {
-    if destination.exists() && !force_replace {
-        emit_setup_progress(
-            app,
-            asset_name,
-            "install",
-            "skipped",
-            format!("{} already exists", destination.display()),
-            source.map(ToString::to_string),
-            destination,
-            None,
-            None,
-        );
-        return Ok(());
-    }
-
     if source.is_none()
         && bundled_sidecar_name
             .filter(|name| bundled_sidecar_available(app, name))
@@ -337,6 +346,21 @@ fn install_binary_if_needed(
             "skipped",
             format!("{asset_name} will use the bundled sidecar binary"),
             None,
+            destination,
+            None,
+            None,
+        );
+        return Ok(());
+    }
+
+    if destination.exists() && !force_replace {
+        emit_setup_progress(
+            app,
+            asset_name,
+            "install",
+            "skipped",
+            format!("{} already exists", destination.display()),
+            source.map(ToString::to_string),
             destination,
             None,
             None,
