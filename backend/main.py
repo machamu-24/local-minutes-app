@@ -82,7 +82,9 @@ app.add_middleware(
         "http://localhost:5173",   # Vite 開発サーバー
         "http://127.0.0.1:1420",
         "http://127.0.0.1:5173",
-        "tauri://localhost",       # Tauri プロダクションビルド
+        "tauri://localhost",       # Tauri プロダクションビルド (macOS / Linux)
+        "http://tauri.localhost",  # Tauri プロダクションビルド (Windows)
+        "https://tauri.localhost", # Tauri プロダクションビルド (Windows HTTPS モード)
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],

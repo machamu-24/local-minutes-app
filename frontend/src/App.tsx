@@ -20,6 +20,7 @@ function AppRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
   const [bootstrapping, setBootstrapping] = useState(isTauriRuntime());
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
 
   useEffect(() => {
     if (!isTauriRuntime() || location.pathname === "/setup") {
@@ -41,6 +42,8 @@ function AppRoutes() {
         if (status.managedRuntimeEnabled) {
           let backendReady = false;
           for (let attempt = 0; attempt < BACKEND_BOOTSTRAP_MAX_ATTEMPTS; attempt += 1) {
+            if (active) setBootstrapAttempt(attempt + 1);
+
             try {
               await healthCheck();
               backendReady = true;
@@ -102,6 +105,11 @@ function AppRoutes() {
             バックエンドとローカル AI ランタイムの起動を待っています。初回起動時は Windows の
             セキュリティスキャンで少し時間がかかることがあります。
           </p>
+          {bootstrapAttempt > 0 && (
+            <p className="mt-3 text-xs text-gray-400">
+              接続試行中... ({bootstrapAttempt} / {BACKEND_BOOTSTRAP_MAX_ATTEMPTS})
+            </p>
+          )}
         </div>
       </div>
     );

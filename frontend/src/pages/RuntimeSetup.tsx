@@ -12,6 +12,7 @@ import {
   isHttpUrl,
   isTauriRuntime,
   listenSidecarStatus,
+  listenSidecarOutput,
   listenSetupProgress,
   pickExecutablePath,
   pickModelPath,
@@ -21,6 +22,7 @@ import {
   RuntimeStatus,
   SetupProgressPayload,
   SidecarStatusPayload,
+  SidecarOutputPayload,
 } from "../lib/tauriRuntimeSetup";
 import {
   getStoredWhisperModel,
@@ -87,6 +89,7 @@ export default function RuntimeSetup() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [progressEvents, setProgressEvents] = useState<SetupProgressPayload[]>([]);
   const [sidecarEvents, setSidecarEvents] = useState<SidecarStatusPayload[]>([]);
+  const [outputEvents, setOutputEvents] = useState<SidecarOutputPayload[]>([]);
 
   const [backendSource, setBackendSource] = useState("");
   const [llamaServerSource, setLlamaServerSource] = useState("");
@@ -237,6 +240,35 @@ export default function RuntimeSetup() {
     };
   }, [tauriAvailable]);
 
+  useEffect(() => {
+    if (!tauriAvailable) return;
+
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    listenSidecarOutput((payload) => {
+      if (!active) return;
+      setOutputEvents((current) => {
+        const next = [...current, payload];
+        return next.length > 200 ? next.slice(-200) : next;
+      });
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((e) => {
+        if (!active) return;
+        setError(e instanceof Error ? e.message : "プロセス出力イベントの購読に失敗しました");
+      });
+
+    return () => {
+      active = false;
+      if (unlisten) {
+        void unlisten();
+      }
+    };
+  }, [tauriAvailable]);
+
   const handleExecutablePick = async (
     setter: (value: string) => void
   ) => {
@@ -329,6 +361,7 @@ export default function RuntimeSetup() {
     setSuccessMessage(null);
     setProgressEvents([]);
     setSidecarEvents([]);
+    setOutputEvents([]);
 
     try {
       const nextStatus = await prepareRuntimeAssets({
@@ -856,6 +889,36 @@ export default function RuntimeSetup() {
                         )}
                       </div>
                     ))
+                  )}
+                </div>
+              </section>
+
+              <section className="card">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-base font-semibold text-gray-900">プロセス出力ログ</h2>
+                  {outputEvents.length > 0 && (
+                    <span className="text-xs text-gray-500">
+                      {outputEvents.length} 行
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-4 max-h-[20rem] overflow-y-auto pr-1">
+                  {outputEvents.length === 0 ? (
+                    <p className="text-sm text-gray-500">
+                      まだプロセス出力はありません。backend / llama-server の stdout / stderr がここに表示されます。
+                    </p>
+                  ) : (
+                    <pre className="text-[11px] leading-5 text-gray-700 whitespace-pre-wrap break-all font-mono">
+                      {outputEvents.map((item, index) => (
+                        <span
+                          key={index}
+                          className={item.stream === "stderr" ? "text-amber-700" : ""}
+                        >
+                          [{item.sidecar}/{item.stream}] {item.line}{"\n"}
+                        </span>
+                      ))}
+                    </pre>
                   )}
                 </div>
               </section>

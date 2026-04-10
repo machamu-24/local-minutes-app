@@ -28,6 +28,7 @@ const LLAMA_HOST: &str = "127.0.0.1";
 const LLAMA_PORT: &str = "8080";
 const DEFAULT_LLAMA_CONTEXT_SIZE: &str = "8192";
 const RUNTIME_EVENT_NAME: &str = "runtime://sidecar-status";
+const RUNTIME_OUTPUT_EVENT_NAME: &str = "runtime://sidecar-output";
 
 #[derive(Clone, Copy)]
 enum ManagedSidecar {
@@ -109,6 +110,14 @@ struct SidecarEventPayload {
     status: String,
     pid: Option<u32>,
     detail: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SidecarOutputPayload {
+    sidecar: String,
+    stream: String,
+    line: String,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -378,18 +387,22 @@ fn spawn_native_process(
     );
 
     if let Some(stdout) = stdout {
-        spawn_output_reader_thread(sidecar, stdout, false);
+        spawn_output_reader_thread(app.clone(), sidecar, stdout, false);
     }
     if let Some(stderr) = stderr {
-        spawn_output_reader_thread(sidecar, stderr, true);
+        spawn_output_reader_thread(app.clone(), sidecar, stderr, true);
     }
     spawn_native_wait_thread(app.clone(), sidecar, pid, child);
 
     Ok(())
 }
 
-fn spawn_output_reader_thread<R>(sidecar: ManagedSidecar, reader: R, stderr: bool)
-where
+fn spawn_output_reader_thread<R>(
+    app: AppHandle,
+    sidecar: ManagedSidecar,
+    reader: R,
+    stderr: bool,
+) where
     R: Read + Send + 'static,
 {
     thread::spawn(move || {
@@ -403,6 +416,7 @@ where
                     } else {
                         log::info!("{} {}: {}", sidecar.name(), prefix, line);
                     }
+                    emit_sidecar_output(&app, sidecar, prefix, &line);
                 }
                 Ok(_) => {}
                 Err(err) => {
@@ -782,6 +796,26 @@ fn emit_sidecar_event(
     if let Err(err) = app.emit(RUNTIME_EVENT_NAME, payload) {
         log::debug!(
             "failed to emit runtime sidecar event for {}: {err}",
+            sidecar.name()
+        );
+    }
+}
+
+fn emit_sidecar_output(
+    app: &AppHandle,
+    sidecar: ManagedSidecar,
+    stream: &str,
+    line: &str,
+) {
+    let payload = SidecarOutputPayload {
+        sidecar: sidecar.label().to_string(),
+        stream: stream.to_string(),
+        line: line.to_string(),
+    };
+
+    if let Err(err) = app.emit(RUNTIME_OUTPUT_EVENT_NAME, payload) {
+        log::debug!(
+            "failed to emit sidecar output event for {}: {err}",
             sidecar.name()
         );
     }

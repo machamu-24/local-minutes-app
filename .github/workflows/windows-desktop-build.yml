@@ -103,6 +103,32 @@ jobs:
             if (-not $healthy) {
               throw "backend executable health check did not pass via $healthUrl"
             }
+
+            # Verify CORS headers for the Tauri Windows production origin.
+            # Previous builds were missing this origin which caused every API
+            # request to be blocked by the browser CORS policy.
+            $corsOrigins = @(
+              "http://tauri.localhost",
+              "https://tauri.localhost"
+            )
+
+            foreach ($origin in $corsOrigins) {
+              try {
+                $corsResponse = Invoke-WebRequest -Uri $healthUrl -Method OPTIONS -Headers @{
+                  "Origin" = $origin
+                  "Access-Control-Request-Method" = "GET"
+                } -TimeoutSec 5
+
+                $allowOrigin = $corsResponse.Headers["Access-Control-Allow-Origin"]
+                if ($allowOrigin -ne $origin) {
+                  throw "CORS check failed for origin '$origin': Access-Control-Allow-Origin='$allowOrigin'"
+                }
+              } catch {
+                throw "CORS preflight failed for origin '$origin': $($_.Exception.Message)"
+              }
+            }
+
+            Write-Host "CORS verification passed for Tauri production origins"
           } finally {
             if ($proc -and -not $proc.HasExited) {
               Stop-Process -Id $proc.Id -Force

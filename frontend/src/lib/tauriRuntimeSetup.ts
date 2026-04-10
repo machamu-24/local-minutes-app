@@ -65,6 +65,14 @@ export interface SidecarStatusPayload {
   detail: string | null;
 }
 
+export interface SidecarOutputPayload {
+  sidecar: string;
+  stream: string;
+  line: string;
+}
+
+export const SIDECAR_OUTPUT_EVENT_NAME = "runtime://sidecar-output";
+
 export const isTauriRuntime = (): boolean => isTauri();
 
 export const getRuntimeStatus = async (): Promise<RuntimeStatus> =>
@@ -92,6 +100,13 @@ export const listenSidecarStatus = async (
   handler: (payload: SidecarStatusPayload) => void
 ) =>
   listen<SidecarStatusPayload>(SIDECAR_STATUS_EVENT_NAME, (event) => {
+    handler(event.payload);
+  });
+
+export const listenSidecarOutput = async (
+  handler: (payload: SidecarOutputPayload) => void
+) =>
+  listen<SidecarOutputPayload>(SIDECAR_OUTPUT_EVENT_NAME, (event) => {
     handler(event.payload);
   });
 

@@ -270,6 +270,18 @@ export default function RecordingList() {
               <div>
                 <p className="text-sm font-medium text-red-800">エラーが発生しました</p>
                 <p className="text-sm text-red-700 mt-1">{error}</p>
+                {error.includes("接続できません") && (
+                  <p className="text-xs text-red-600 mt-2">
+                    バックエンドプロセスの起動状態を確認するには、
+                    <button
+                      onClick={() => navigate("/setup")}
+                      className="underline font-medium"
+                    >
+                      初回セットアップ画面
+                    </button>
+                    のプロセス出力ログを確認してください。
+                  </p>
+                )}
                 <button
                   onClick={() => void fetchRecordings({ startupRetry: true })}
                   className="text-sm text-red-600 underline mt-2"
