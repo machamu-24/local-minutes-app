@@ -140,11 +140,27 @@ jobs:
           LLAMA_DIR="$RUNNER_TEMP/llama.cpp"
           rm -rf "$LLAMA_DIR"
           git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
-          cmake -S "$LLAMA_DIR" -B "$LLAMA_DIR/build" -DLLAMA_BUILD_SERVER=ON -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF -DLLAMA_OPENSSL=OFF
+          cmake -S "$LLAMA_DIR" -B "$LLAMA_DIR/build" \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DGGML_NATIVE=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_OPENSSL=OFF \
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           cmake --build "$LLAMA_DIR/build" --config Release --target llama-server
           LLAMA_SERVER_PATH="$(find "$LLAMA_DIR/build" -name 'llama-server.exe' | head -n 1)"
           test -n "$LLAMA_SERVER_PATH"
           cp "$LLAMA_SERVER_PATH" src-tauri/binaries/llama-server-x86_64-pc-windows-msvc.exe
+
+      - name: Download Visual C++ Redistributable
+        shell: pwsh
+        run: |
+          $vcRedistDir = "src-tauri/resources"
+          New-Item -ItemType Directory -Path $vcRedistDir -Force | Out-Null
+          $vcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          $vcRedistPath = Join-Path $vcRedistDir "vc_redist.x64.exe"
+          Write-Host "Downloading VC++ Redistributable from $vcRedistUrl"
+          Invoke-WebRequest -Uri $vcRedistUrl -OutFile $vcRedistPath
+          Write-Host "Downloaded: $(Get-Item $vcRedistPath | Select-Object -ExpandProperty Length) bytes"
 
       - name: Build Tauri desktop app
         run: pnpm tauri build

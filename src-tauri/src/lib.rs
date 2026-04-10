@@ -526,16 +526,18 @@ fn spawn_llama_sidecar_fallback(app: &AppHandle) -> Result<(), String> {
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(line) => {
-                    log::info!(
-                        "llama-server stdout: {}",
-                        String::from_utf8_lossy(&line).trim_end()
-                    );
+                    let text = String::from_utf8_lossy(&line).trim_end().to_string();
+                    if !text.is_empty() {
+                        log::info!("llama-server stdout: {}", text);
+                        emit_sidecar_output(&app_handle, ManagedSidecar::Llm, "stdout", &text);
+                    }
                 }
                 CommandEvent::Stderr(line) => {
-                    log::warn!(
-                        "llama-server stderr: {}",
-                        String::from_utf8_lossy(&line).trim_end()
-                    );
+                    let text = String::from_utf8_lossy(&line).trim_end().to_string();
+                    if !text.is_empty() {
+                        log::warn!("llama-server stderr: {}", text);
+                        emit_sidecar_output(&app_handle, ManagedSidecar::Llm, "stderr", &text);
+                    }
                 }
                 CommandEvent::Error(error) => {
                     log::error!("llama-server error: {error}");
@@ -596,16 +598,18 @@ fn spawn_backend_sidecar_fallback(app: &AppHandle) -> Result<(), String> {
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(line) => {
-                    log::info!(
-                        "backend stdout: {}",
-                        String::from_utf8_lossy(&line).trim_end()
-                    );
+                    let text = String::from_utf8_lossy(&line).trim_end().to_string();
+                    if !text.is_empty() {
+                        log::info!("backend stdout: {}", text);
+                        emit_sidecar_output(&app_handle, ManagedSidecar::Backend, "stdout", &text);
+                    }
                 }
                 CommandEvent::Stderr(line) => {
-                    log::warn!(
-                        "backend stderr: {}",
-                        String::from_utf8_lossy(&line).trim_end()
-                    );
+                    let text = String::from_utf8_lossy(&line).trim_end().to_string();
+                    if !text.is_empty() {
+                        log::warn!("backend stderr: {}", text);
+                        emit_sidecar_output(&app_handle, ManagedSidecar::Backend, "stderr", &text);
+                    }
                 }
                 CommandEvent::Error(error) => {
                     log::error!("backend error: {error}");

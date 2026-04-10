@@ -18,6 +18,8 @@ node_modules/
 
 # Tauri
 src-tauri/target/
+src-tauri/binaries/
+src-tauri/resources/
 
 # データベース・音声ファイル（ローカルデータ）
 *.db
