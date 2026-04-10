@@ -361,6 +361,13 @@ fn spawn_native_process(
         .stderr(Stdio::piped())
         .args(args);
 
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
     for (key, value) in envs {
         command.env(key, value);
     }

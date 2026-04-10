@@ -134,6 +134,7 @@ def main() -> int:
         "--noconfirm",
         "--clean",
         "--onefile",
+        "--noconsole",
         "--name",
         BACKEND_BINARY_NAME,
         "--distpath",
