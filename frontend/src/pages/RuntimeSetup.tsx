@@ -34,6 +34,11 @@ import {
 
 type ModelSourceMode = "download" | "local";
 
+// Rust 側の DEFAULT_MODEL_URL と同期させること
+const DEFAULT_GGUF_DOWNLOAD_URL =
+  "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf";
+const DEFAULT_GGUF_FILENAME = "Qwen3-4B-Q4_K_M.gguf";
+
 const progressToneClass: Record<string, string> = {
   error: "text-red-700 bg-red-50 border-red-200",
   completed: "text-emerald-700 bg-emerald-50 border-emerald-200",
@@ -94,9 +99,9 @@ export default function RuntimeSetup() {
   const [backendSource, setBackendSource] = useState("");
   const [llamaServerSource, setLlamaServerSource] = useState("");
   const [modelSourceMode, setModelSourceMode] = useState<ModelSourceMode>("download");
-  const [modelDownloadUrl, setModelDownloadUrl] = useState("");
+  const [modelDownloadUrl, setModelDownloadUrl] = useState(DEFAULT_GGUF_DOWNLOAD_URL);
   const [modelLocalPath, setModelLocalPath] = useState("");
-  const [modelFilename, setModelFilename] = useState("");
+  const [modelFilename, setModelFilename] = useState(DEFAULT_GGUF_FILENAME);
   const [forceReplaceBinaries, setForceReplaceBinaries] = useState(false);
   const [forceRedownload, setForceRedownload] = useState(false);
   const [prepareWhisper, setPrepareWhisper] = useState(true);
@@ -122,16 +127,16 @@ export default function RuntimeSetup() {
   const applyStatusToForm = (nextStatus: RuntimeSetupStatus) => {
     setBackendSource(nextStatus.backendSource ?? "");
     setLlamaServerSource(nextStatus.llamaServerSource ?? "");
-    setModelFilename(nextStatus.llmModelFilename ?? "");
+    setModelFilename(nextStatus.llmModelFilename || DEFAULT_GGUF_FILENAME);
 
     const nextMode = detectModelSourceMode(nextStatus);
     setModelSourceMode(nextMode);
     if (nextMode === "download") {
-      setModelDownloadUrl(nextStatus.llmModelUrl ?? "");
+      setModelDownloadUrl(nextStatus.llmModelUrl || DEFAULT_GGUF_DOWNLOAD_URL);
       setModelLocalPath("");
     } else {
       setModelLocalPath(nextStatus.llmModelUrl ?? "");
-      setModelDownloadUrl("");
+      setModelDownloadUrl(DEFAULT_GGUF_DOWNLOAD_URL);
     }
   };
 
@@ -406,6 +411,10 @@ export default function RuntimeSetup() {
 
       setSuccessMessage(message);
       await loadStatuses(false);
+      // セットアップ完了後は自動で一覧画面に遷移する
+      if (runtimeReadyAfterSetup && runtimeStatus?.managedRuntimeEnabled) {
+        setTimeout(() => navigate("/"), 1500);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "ランタイムの配置に失敗しました");
     } finally {
@@ -442,7 +451,7 @@ export default function RuntimeSetup() {
             </p>
             <h1 className="text-lg font-bold text-gray-900">初回セットアップ</h1>
             <p className="text-sm text-gray-500 mt-1">
-              `llama-server` とバックエンド EXE、GGUF モデルを配置します。
+              初回起動時に必要な AI モデル（GGUF）をダウンロードします。バックエンドと llama-server は同梱済みです。
             </p>
           </div>
 
@@ -483,8 +492,8 @@ export default function RuntimeSetup() {
                   <div>
                     <h2 className="text-base font-semibold text-gray-900">1. 実行ファイルを指定</h2>
                     <p className="text-sm text-gray-600 mt-1">
-                      配布用に使う `llama-server` とバックエンド EXE を選択します。
-                      同梱 sidecar がある場合は空欄のまま進められます。
+                      配布版インストーラーにはバックエンドと llama-server が同梱されています。
+                      「同梱済み」と表示されている場合は、そのまま次のステップに進めます。
                     </p>
                   </div>
                   <label className="inline-flex items-center gap-2 text-sm text-gray-700">
@@ -604,7 +613,8 @@ export default function RuntimeSetup() {
                   <div>
                     <h2 className="text-base font-semibold text-gray-900">2. GGUF モデルを指定</h2>
                     <p className="text-sm text-gray-600 mt-1">
-                      軽量モデルを URL から取得するか、手元の GGUF を配置します。
+                      URL から自動ダウンロードするか、手元の GGUF ファイルを指定します。
+                      既定の Qwen3-4B を使用する場合は URL の変更不要です。
                     </p>
                   </div>
                   <label className="inline-flex items-center gap-2 text-sm text-gray-700">
@@ -665,7 +675,7 @@ export default function RuntimeSetup() {
                         className="input"
                       />
                       <p className="text-xs text-gray-500 mt-2">
-                        初回配布の既定は軽量の Qwen3 4B GGUF を想定しています。
+                        既定は Qwen3-4B (Q4_K_M, 約 2.5 GB) です。URL を変更すれば別モデルも利用できます。
                       </p>
                     </div>
                   ) : (
@@ -772,7 +782,8 @@ export default function RuntimeSetup() {
                   <div>
                     <h2 className="text-base font-semibold text-gray-900">4. 配置を実行</h2>
                     <p className="text-sm text-gray-600 mt-1">
-                      選択したファイルのコピー、モデル URL の取得、runtime 再起動まで実行します。
+                      GGUF モデルのダウンロード（約 2.5 GB）と runtime 再起動を実行します。
+                      完了後は自動で一覧画面に遷移します。
                     </p>
                   </div>
                   <button
@@ -780,7 +791,7 @@ export default function RuntimeSetup() {
                     disabled={submitting}
                     className="btn-primary min-w-40"
                   >
-                    {submitting ? "配置中..." : "ランタイムを配置する"}
+                    {submitting ? "ダウンロード・配置中..." : "モデルをダウンロードしてセットアップする"}
                   </button>
                 </div>
               </section>
