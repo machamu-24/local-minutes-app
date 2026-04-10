@@ -13,6 +13,53 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # ─────────────────────────────────────────────
+# Windows 用の安全な標準出力・エラー出力ラッパー
+# (Tauri sidecar 実行時の OSError: [Errno 22] 対策)
+# ─────────────────────────────────────────────
+class SafeStream:
+    def __init__(self, stream):
+        self.stream = stream
+
+    def write(self, data):
+        try:
+            if self.stream is not None:
+                self.stream.write(data)
+        except Exception:
+            pass
+
+    def flush(self):
+        try:
+            if self.stream is not None:
+                self.stream.flush()
+        except Exception:
+            pass
+
+    def isatty(self):
+        try:
+            if getattr(self.stream, "isatty", None):
+                return self.stream.isatty()
+        except Exception:
+            pass
+        return False
+
+    def fileno(self):
+        try:
+            if getattr(self.stream, "fileno", None):
+                return self.stream.fileno()
+        except Exception:
+            pass
+        raise OSError("SafeStream has no fileno")
+
+    def __getattr__(self, attr):
+        if self.stream is not None:
+            return getattr(self.stream, attr)
+        raise AttributeError(f"'SafeStream' object has no attribute '{attr}'")
+
+if sys.platform == "win32":
+    sys.stdout = SafeStream(sys.stdout)
+    sys.stderr = SafeStream(sys.stderr)
+
+# ─────────────────────────────────────────────
 # ログ設定
 # ─────────────────────────────────────────────
 logging.basicConfig(
