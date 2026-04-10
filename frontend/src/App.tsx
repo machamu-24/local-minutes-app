@@ -13,6 +13,8 @@ import { getRuntimeStatus, isTauriRuntime } from "./lib/tauriRuntimeSetup";
 import { healthCheck } from "./api/client";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const BACKEND_BOOTSTRAP_MAX_ATTEMPTS = 300;
+const BACKEND_BOOTSTRAP_EARLY_FAILURE_AFTER = 15;
 
 function AppRoutes() {
   const location = useLocation();
@@ -28,7 +30,7 @@ function AppRoutes() {
     let active = true;
     (async () => {
       try {
-        const status = await getRuntimeStatus();
+        let status = await getRuntimeStatus();
         if (!active) return;
 
         if (status.managedRuntimeEnabled && !status.runtimeReady) {
@@ -38,13 +40,29 @@ function AppRoutes() {
 
         if (status.managedRuntimeEnabled) {
           let backendReady = false;
-          for (let attempt = 0; attempt < 45; attempt += 1) {
+          for (let attempt = 0; attempt < BACKEND_BOOTSTRAP_MAX_ATTEMPTS; attempt += 1) {
             try {
               await healthCheck();
               backendReady = true;
               break;
             } catch {
               await wait(1000);
+            }
+
+            try {
+              status = await getRuntimeStatus();
+            } catch {
+              continue;
+            }
+
+            if (!active) return;
+
+            if (!status.runtimeReady) {
+              break;
+            }
+
+            if (!status.backendRunning && attempt >= BACKEND_BOOTSTRAP_EARLY_FAILURE_AFTER) {
+              break;
             }
           }
 

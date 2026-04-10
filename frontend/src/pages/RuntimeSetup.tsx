@@ -71,6 +71,10 @@ const detectModelSourceMode = (status: RuntimeSetupStatus | null): ModelSourceMo
   return isHttpUrl(status.llmModelUrl) ? "download" : "local";
 };
 
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const RUNTIME_STATUS_REFRESH_INTERVAL_MS = 3000;
+const BACKEND_READY_MAX_ATTEMPTS = 300;
+
 export default function RuntimeSetup() {
   const navigate = useNavigate();
   const tauriAvailable = isTauriRuntime();
@@ -160,6 +164,31 @@ export default function RuntimeSetup() {
     if (!tauriAvailable) return;
 
     let active = true;
+    const refreshRuntimeStatus = async () => {
+      try {
+        const nextRuntimeStatus = await getRuntimeStatus();
+        if (!active) return;
+        setRuntimeStatus(nextRuntimeStatus);
+      } catch {
+        // 接続待ち中は一時的に失敗するため、定期更新では黙って次回再試行する
+      }
+    };
+
+    void refreshRuntimeStatus();
+    const intervalId = window.setInterval(() => {
+      void refreshRuntimeStatus();
+    }, RUNTIME_STATUS_REFRESH_INTERVAL_MS);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [tauriAvailable]);
+
+  useEffect(() => {
+    if (!tauriAvailable) return;
+
+    let active = true;
     let unlisten: (() => void) | null = null;
 
     listenSetupProgress((payload) => {
@@ -232,17 +261,39 @@ export default function RuntimeSetup() {
   };
 
   const waitForBackendReady = async () => {
-    const maxAttempts = 90;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    let lastObservedRuntimeStatus: RuntimeStatus | null = null;
+
+    for (let attempt = 0; attempt < BACKEND_READY_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        lastObservedRuntimeStatus = await getRuntimeStatus();
+        setRuntimeStatus(lastObservedRuntimeStatus);
+      } catch {
+        // 取得不能でも health check 自体は継続する
+      }
+
       try {
         await healthCheck();
         return;
       } catch {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (lastObservedRuntimeStatus && !lastObservedRuntimeStatus.backendRunning) {
+          throw new Error(
+            "バックエンドが起動直後に停止しました。Sidecar 状態ログを確認してください。"
+          );
+        }
+
+        await wait(1000);
       }
     }
 
-    throw new Error("バックエンド再起動後のヘルスチェックがタイムアウトしました");
+    if (lastObservedRuntimeStatus?.backendRunning) {
+      throw new Error(
+        "バックエンドのプロセスは起動していますが、5 分以内にヘルスチェックへ応答しませんでした。初回起動時は Windows のセキュリティスキャンで時間がかかることがあります。しばらく待ってから「状態を再取得」を実行してください。"
+      );
+    }
+
+    throw new Error(
+      "バックエンドが起動しませんでした。Sidecar 状態ログを確認してください。"
+    );
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
