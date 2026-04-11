@@ -19,7 +19,8 @@ use crate::runtime_assets::{
     bundled_sidecar_available, configured_llm_model_alias, external_backend_source_configured,
     external_llama_server_source_configured, installed_backend_path, installed_llama_server_path,
     installed_model_path, prepare_runtime_assets, runtime_paths, runtime_setup_status,
-    PrepareRuntimeAssetsRequest, RuntimeSetupStatus, BACKEND_SIDECAR_NAME, LLAMA_SIDECAR_NAME,
+    sync_bundled_binaries_to_runtime, PrepareRuntimeAssetsRequest, RuntimeSetupStatus,
+    BACKEND_SIDECAR_NAME, LLAMA_SIDECAR_NAME,
 };
 
 const BACKEND_HOST: &str = "127.0.0.1";
@@ -146,6 +147,12 @@ pub fn run() {
         .expect("error while building tauri application");
 
     if should_manage_sidecars() {
+        // アプリ起動時にバンドルされた最新バイナリを runtime/bin に同期する。
+        // これにより旧バージョンインストール時の残留バイナリを確実に上書きする。
+        if let Err(err) = sync_bundled_binaries_to_runtime(&app.handle().clone()) {
+            log::warn!("failed to sync bundled binaries to runtime: {err}");
+        }
+
         if let Err(err) = start_managed_sidecars(&app.handle().clone()) {
             log::error!("managed runtime startup failed: {err}");
         }
@@ -191,6 +198,9 @@ fn restart_managed_runtime_command(
     state: State<'_, RuntimeSidecarState>,
 ) -> Result<RuntimeStatusPayload, String> {
     stop_managed_sidecars(&app);
+    // プロセス終了後、SQLite のロックが解放されるまで待機する
+    // Windows では kill() 直後にファイルロックが残存する場合がある
+    thread::sleep(Duration::from_millis(1500));
 
     if should_manage_sidecars() {
         start_managed_sidecars(&app)?;

@@ -99,9 +99,14 @@ logger.debug(
 
 # SQLAlchemy エンジン作成
 # check_same_thread=False は SQLite の非同期利用に必要
+# timeout=30: 他のプロセスがロックを保持している場合、最大30秒待機する
+#   (バックエンド再起動時の "database is locked" エラーを防ぐ)
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args={
+        "check_same_thread": False,
+        "timeout": 30,  # SQLite busy timeout (秒)
+    },
     echo=False,  # SQLログ出力（デバッグ時は True に変更）
 )
 
@@ -124,6 +129,22 @@ def get_db():
         db.close()
 
 
+def _cleanup_stale_wal_files() -> None:
+    """
+    前回のプロセスが異常終了した際に残存する WAL / SHM ファイルを削除する。
+    プロセスが存在しない状態で WAL ファイルが残っていると
+    次回起動時に "database is locked" エラーが発生する場合がある。
+    """
+    for suffix in ("-wal", "-shm", "-journal"):
+        stale = DATABASE_PATH.parent / (DATABASE_PATH.name + suffix)
+        if stale.exists():
+            try:
+                stale.unlink()
+                logger.info("古い WAL/SHM ファイルを削除しました: %s", stale)
+            except OSError as exc:
+                logger.warning("古い WAL/SHM ファイルの削除に失敗しました: %s (%s)", stale, exc)
+
+
 def init_db():
     """
     データベースの初期化（テーブル作成）。
@@ -134,6 +155,8 @@ def init_db():
         DATABASE_PATH,
         sys.platform,
     )
+    # 前回起動時の残存 WAL ファイルをクリーンアップ
+    _cleanup_stale_wal_files()
     # models をインポートしてテーブル定義を登録
     from . import models  # noqa: F401
     try:
@@ -152,6 +175,11 @@ def init_db():
             sys.platform,
         )
         raise
+    # WAL モードを有効化する（複数プロセスからの同時アクセスを安全に処理）
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA journal_mode=WAL"))
+        conn.execute(text("PRAGMA busy_timeout=30000"))  # 30秒
+        conn.commit()
     _ensure_column_exists("recordings", "last_summary_template_name", "VARCHAR(50)")
     _ensure_column_exists("summaries", "prompt_snapshot", "TEXT")
     logger.info("データベース初期化完了: %s", DATABASE_PATH)

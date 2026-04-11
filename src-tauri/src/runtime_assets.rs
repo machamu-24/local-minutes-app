@@ -103,6 +103,78 @@ pub fn bundled_sidecar_available(app: &AppHandle, sidecar_name: &str) -> bool {
     app.shell().sidecar(sidecar_name).is_ok()
 }
 
+/// バンドルされたサイドカーバイナリ（インストールディレクトリ）のパスを返す。
+/// Tauri v2 の externalBin はインストールルートに `{name}.exe` として配置される。
+pub fn bundled_sidecar_path(app: &AppHandle, sidecar_name: &str) -> Option<PathBuf> {
+    if cfg!(debug_assertions) {
+        return None;
+    }
+
+    // Tauri v2 の resource_dir() はインストールディレクトリの `resources/` を返す。
+    // externalBin バイナリはインストールルート（resource_dir の親）に配置される。
+    let install_dir = app
+        .path()
+        .resource_dir()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))?;
+
+    let binary_name = executable_file_name(sidecar_name);
+    let path = install_dir.join(&binary_name);
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+/// バンドルされたバイナリを runtime/bin ディレクトリに強制コピーする。
+/// 旧バージョンの残留バイナリを確実に最新版で上書きするために使用する。
+pub fn sync_bundled_binaries_to_runtime(app: &AppHandle) -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        return Ok(());
+    }
+
+    let paths = runtime_paths(app)?;
+    ensure_runtime_dirs(&paths)?;
+
+    for (sidecar_name, dest_path) in [
+        (BACKEND_SIDECAR_NAME, &paths.backend_binary_path),
+        (LLAMA_SIDECAR_NAME, &paths.llama_server_binary_path),
+    ] {
+        if let Some(src_path) = bundled_sidecar_path(app, sidecar_name) {
+            // 既存ファイルを削除してから新しいバイナリをコピーする
+            if dest_path.exists() {
+                fs::remove_file(dest_path).map_err(|err| {
+                    format!(
+                        "failed to remove stale binary {}: {err}",
+                        dest_path.display()
+                    )
+                })?;
+            }
+            fs::copy(&src_path, dest_path).map_err(|err| {
+                format!(
+                    "failed to copy bundled binary {} -> {}: {err}",
+                    src_path.display(),
+                    dest_path.display()
+                )
+            })?;
+            finalize_asset_permissions(dest_path, true)?;
+            log::info!(
+                "synced bundled binary {} -> {}",
+                src_path.display(),
+                dest_path.display()
+            );
+        } else {
+            log::debug!(
+                "bundled binary for {} not found in install directory; skipping sync",
+                sidecar_name
+            );
+        }
+    }
+
+    Ok()
+}
+
 pub fn runtime_paths(app: &AppHandle) -> Result<RuntimePaths, String> {
     let root_dir = app
         .path()

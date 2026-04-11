@@ -1,6 +1,28 @@
 ; NSIS Installer Hooks for Local Minutes
-; Visual C++ Redistributable の自動インストール
 
+; ============================================================
+; PREINSTALL: 旧バイナリを強制削除してから新バイナリをコピーさせる
+;
+; PyInstaller ビルドのバイナリには Windows バージョンリソースが
+; 含まれないため、NSIS のバージョン比較ロジックが同バージョン
+; 再インストール時にファイルを上書きしないことがある。
+; プロセスを終了してから旧ファイルを明示的に削除することで、
+; 確実に最新バイナリが配置されるようにする。
+; ============================================================
+!macro NSIS_HOOK_PREINSTALL
+  ; バックエンドとllama-serverのプロセスを強制終了
+  nsExec::Exec 'taskkill /F /IM local-minutes-backend.exe'
+  nsExec::Exec 'taskkill /F /IM llama-server.exe'
+  ; プロセス終了後にファイルロックが解放されるまで待機
+  Sleep 1500
+  ; 旧バイナリを明示的に削除（NSISが確実に新バイナリをコピーするように）
+  Delete "$INSTDIR\local-minutes-backend.exe"
+  Delete "$INSTDIR\llama-server.exe"
+!macroend
+
+; ============================================================
+; POSTINSTALL: Visual C++ Redistributable の自動インストール
+; ============================================================
 !macro NSIS_HOOK_POSTINSTALL
   ; Check if Visual C++ 2015-2022 Redistributable is installed
   ReadRegDWord $0 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Installed"
