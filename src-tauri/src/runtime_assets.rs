@@ -172,7 +172,7 @@ pub fn sync_bundled_binaries_to_runtime(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    Ok()
+    Ok(())
 }
 
 pub fn runtime_paths(app: &AppHandle) -> Result<RuntimePaths, String> {
