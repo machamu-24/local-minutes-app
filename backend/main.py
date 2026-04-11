@@ -87,11 +87,19 @@ def runtime_port() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """アプリ起動・終了時の処理"""
+    import sys
+    logger.info(
+        "バックエンド起動中: host=%s port=%s platform=%s python=%s",
+        runtime_host(),
+        runtime_port(),
+        sys.platform,
+        sys.version,
+    )
     # 起動時: データベース初期化
-    logger.info("データベースを初期化しています...")
-    from .database import init_db
+    from .database import init_db, APP_DATA_DIR, DATABASE_PATH
+    logger.info("アプリデータディレクトリ: %s", APP_DATA_DIR)
+    logger.info("データベースパス: %s", DATABASE_PATH)
     init_db()
-    logger.info("データベース初期化完了")
     logger.info("ローカル AI 議事録作成アプリ バックエンドが起動しました")
     logger.info("API ドキュメント: http://%s:%s/docs", runtime_host(), runtime_port())
 
