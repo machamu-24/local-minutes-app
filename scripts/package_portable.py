@@ -63,7 +63,7 @@ Recommended usage
 -----------------
 1. Install Ollama on the target Windows PC.
 2. Pull the model you want to use, for example:
-     ollama pull qwen2.5:7b
+     ollama pull qwen3:4b
 3. Double-click start-local-minutes.bat
 4. The browser UI opens at http://127.0.0.1:8000
 

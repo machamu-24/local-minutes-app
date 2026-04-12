@@ -15,7 +15,7 @@ import httpx
 LLMProviderName = Literal["ollama", "openai_compatible"]
 
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
+DEFAULT_OLLAMA_MODEL = "qwen3:4b"
 
 # 配布版では llama.cpp / llama-server を想定する。
 # モデル ID は sidecar 起動時の alias に合わせて差し替えられるよう環境変数で上書き可能にする。
