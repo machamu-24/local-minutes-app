@@ -8,9 +8,12 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 # ─────────────────────────────────────────────
 # Windows 用の安全な標準出力・エラー出力ラッパー
@@ -78,6 +81,37 @@ def runtime_host() -> str:
 
 def runtime_port() -> str:
     return os.getenv("LOCAL_MINUTES_API_PORT", "8000")
+
+
+def resolve_frontend_dist_dir() -> Optional[Path]:
+    configured = os.getenv("LOCAL_MINUTES_FRONTEND_DIST")
+    candidates: list[Path] = []
+
+    if configured:
+        candidates.append(Path(configured).expanduser())
+
+    if getattr(sys, "frozen", False):
+        executable_dir = Path(sys.executable).resolve().parent
+        candidates.extend(
+            [
+                executable_dir / "dist",
+                executable_dir / "frontend" / "dist",
+            ]
+        )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    candidates.append(repo_root / "frontend" / "dist")
+
+    for candidate in candidates:
+        index_path = candidate / "index.html"
+        if index_path.exists():
+            return candidate
+
+    return None
+
+
+FRONTEND_DIST_DIR = resolve_frontend_dist_dir()
+FRONTEND_RESERVED_PREFIXES = ("api/", "docs", "redoc", "openapi.json")
 
 
 # ─────────────────────────────────────────────
@@ -167,6 +201,48 @@ async def health_check():
         "message": "ローカル AI 議事録作成アプリ バックエンドが正常に動作しています",
         "version": "1.0.0",
     }
+
+
+def _resolve_frontend_asset(full_path: str) -> Optional[Path]:
+    if not FRONTEND_DIST_DIR:
+        return None
+
+    relative_path = full_path.strip("/")
+    if not relative_path:
+        return FRONTEND_DIST_DIR / "index.html"
+
+    candidate = (FRONTEND_DIST_DIR / relative_path).resolve()
+    frontend_root = FRONTEND_DIST_DIR.resolve()
+
+    try:
+        candidate.relative_to(frontend_root)
+    except ValueError:
+        return None
+
+    if candidate.is_file():
+        return candidate
+
+    return None
+
+
+if FRONTEND_DIST_DIR is not None:
+    logger.info("フロントエンド配信を有効化します: %s", FRONTEND_DIST_DIR)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend(full_path: str):
+        normalized_path = full_path.strip("/")
+
+        if normalized_path.startswith(FRONTEND_RESERVED_PREFIXES):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        asset_path = _resolve_frontend_asset(normalized_path)
+        if asset_path is not None:
+            return FileResponse(asset_path)
+
+        if normalized_path and Path(normalized_path).suffix:
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        return FileResponse(FRONTEND_DIST_DIR / "index.html")
 
 
 # ─────────────────────────────────────────────

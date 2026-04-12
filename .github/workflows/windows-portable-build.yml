@@ -1,0 +1,190 @@
+name: windows-portable-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
+      - "codex/**"
+    paths:
+      - ".github/workflows/windows-portable-build.yml"
+      - "backend/**"
+      - "frontend/**"
+      - "scripts/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+
+jobs:
+  build-portable:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        run: pnpm install --dir frontend --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm --dir frontend build
+
+      - name: Create backend venv
+        run: python -m venv backend/.venv
+
+      - name: Install backend dependencies
+        run: |
+          backend/.venv/Scripts/python.exe -m pip install --upgrade pip
+          backend/.venv/Scripts/python.exe -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
+
+      - name: Build backend executable
+        run: |
+          backend/.venv/Scripts/python.exe scripts/build_backend.py \
+            --python backend/.venv/Scripts/python.exe \
+            --target-triple x86_64-pc-windows-msvc
+
+      - name: Smoke test backend executable
+        shell: pwsh
+        run: |
+          $backendPath = "src-tauri/binaries/local-minutes-backend-x86_64-pc-windows-msvc.exe"
+          if (-not (Test-Path $backendPath)) {
+            throw "missing backend executable: $backendPath"
+          }
+
+          $healthUrl = "http://127.0.0.1:8011/api/health"
+          $env:LOCAL_MINUTES_API_PORT = "8011"
+          $env:LOCAL_MINUTES_APP_DATA_DIR = Join-Path $env:RUNNER_TEMP "local-minutes-backend-smoke"
+
+          $proc = Start-Process -FilePath $backendPath -PassThru
+
+          try {
+            $healthy = $false
+
+            for ($attempt = 0; $attempt -lt 45; $attempt++) {
+              Start-Sleep -Seconds 2
+
+              if ($proc.HasExited) {
+                throw "backend executable exited early with code $($proc.ExitCode)"
+              }
+
+              try {
+                $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5
+                if ($health.status -eq "ok") {
+                  $healthy = $true
+                  break
+                }
+              } catch {
+              }
+            }
+
+            if (-not $healthy) {
+              throw "backend executable health check did not pass via $healthUrl"
+            }
+          } finally {
+            if ($proc -and -not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force
+            }
+          }
+
+      - name: Download Visual C++ Redistributable
+        shell: pwsh
+        run: |
+          $vcRedistDir = "dist/runtime"
+          New-Item -ItemType Directory -Path $vcRedistDir -Force | Out-Null
+          $vcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          $vcRedistPath = Join-Path $vcRedistDir "vc_redist.x64.exe"
+          Invoke-WebRequest -Uri $vcRedistUrl -OutFile $vcRedistPath
+
+      - name: Build portable package
+        run: |
+          backend/.venv/Scripts/python.exe scripts/package_portable.py \
+            --backend-path src-tauri/binaries/local-minutes-backend-x86_64-pc-windows-msvc.exe \
+            --frontend-dist frontend/dist \
+            --vc-redist-path dist/runtime/vc_redist.x64.exe \
+            --output-dir dist/portable-windows \
+            --archive \
+            --force
+
+      - name: Smoke test portable package
+        shell: pwsh
+        run: |
+          $packageDir = "dist/portable-windows"
+          $backendPath = Join-Path $packageDir "local-minutes-backend.exe"
+          $frontendDist = Join-Path $packageDir "dist"
+          $healthUrl = "http://127.0.0.1:8012/api/health"
+          $rootUrl = "http://127.0.0.1:8012/"
+
+          if (-not (Test-Path $backendPath)) {
+            throw "missing portable backend executable: $backendPath"
+          }
+          if (-not (Test-Path (Join-Path $frontendDist "index.html"))) {
+            throw "missing packaged frontend dist under $frontendDist"
+          }
+
+          $env:LOCAL_MINUTES_API_PORT = "8012"
+          $env:LOCAL_MINUTES_APP_DATA_DIR = Join-Path $env:RUNNER_TEMP "local-minutes-portable-smoke"
+          $env:LOCAL_MINUTES_FRONTEND_DIST = $frontendDist
+
+          $proc = Start-Process -FilePath $backendPath -PassThru
+
+          try {
+            $healthy = $false
+
+            for ($attempt = 0; $attempt -lt 45; $attempt++) {
+              Start-Sleep -Seconds 2
+
+              if ($proc.HasExited) {
+                throw "portable backend exited early with code $($proc.ExitCode)"
+              }
+
+              try {
+                $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5
+                if ($health.status -eq "ok") {
+                  $healthy = $true
+                  break
+                }
+              } catch {
+              }
+            }
+
+            if (-not $healthy) {
+              throw "portable backend health check did not pass via $healthUrl"
+            }
+
+            $rootResponse = Invoke-WebRequest -Uri $rootUrl -TimeoutSec 5
+            if ($rootResponse.Content -notmatch "<div id=`"root`"></div>") {
+              throw "portable frontend smoke test failed: root HTML did not contain the app mount node"
+            }
+          } finally {
+            if ($proc -and -not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force
+            }
+          }
+
+      - name: Upload portable artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-minutes-windows-portable
+          path: dist/portable-windows.zip

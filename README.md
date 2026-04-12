@@ -28,6 +28,23 @@ SQLite（~/.local-minutes/minutes.db）/ ローカルファイルシステム
 faster-whisper / Ollama（localhost:11434）
 ```
 
+## Windows 配布方針
+
+Windows で**他の PC に配布して使わせる**用途では、当面は `Tauri + NSIS` のインストーラ配布よりも、
+**バックエンド EXE + ブラウザ UI の portable ZIP 配布**を推奨します。
+
+理由:
+
+- Tauri / NSIS インストーラ
+- sidecar 起動
+- `llama-server` 同梱
+- Visual C++ ランタイム
+
+の失敗要因が重なるため、他 PC での初回起動失敗率が高くなりやすいためです。
+
+portable 配布では、Windows 標準ブラウザを UI として使い、`http://127.0.0.1:8000` を開きます。
+これにより **インストーラ依存と Tauri 起動失敗をいったん切り離せます**。
+
 ## 必要な環境
 
 - **macOS** 12 以上（GPU なし対応）
@@ -172,6 +189,36 @@ pnpm tauri dev
 # プロダクションビルド
 pnpm tauri build
 ```
+
+### 方法 E: Windows 向け portable ZIP を作る
+
+前提:
+
+- Windows で `scripts/build_backend.py` により backend EXE を作成済み
+- `frontend/dist` をビルド済み
+- 配布先 PC では Ollama を別途インストールして使う
+
+portable パッケージ作成:
+
+```bash
+python scripts/package_portable.py \
+  --backend-path src-tauri/binaries/local-minutes-backend-x86_64-pc-windows-msvc.exe \
+  --frontend-dist frontend/dist \
+  --output-dir dist/portable-windows \
+  --archive \
+  --force
+```
+
+生成物:
+
+- `dist/portable-windows/`
+- `dist/portable-windows.zip`
+
+配布先 PC では `start-local-minutes.bat` を実行してください。
+ブラウザで `http://127.0.0.1:8000` が開きます。
+
+GitHub Actions を使う場合は `.github/workflows/windows-portable-build.yml` を実行すると、
+portable ZIP の artifact を作成できます。
 
 ---
 
