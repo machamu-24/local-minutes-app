@@ -215,10 +215,12 @@ python scripts/package_portable.py \
 - `dist/portable-windows.zip`
 
 配布先 PC では `start-local-minutes.bat` を実行してください。
-ブラウザで `http://127.0.0.1:8000` が開きます。
+ブラウザで `http://127.0.0.1:18000` が開きます。
 
 配布先 PC の Ollama モデルは、16GB クラスのメモリならまず `qwen3:4b` を推奨します。
 余裕がある PC では `qwen3:8b` も候補です。
+
+portable 版はローカル既存サービスとの衝突を避けるため、`8000` ではなく `18000` を使います。
 
 GitHub Actions を使う場合は `.github/workflows/windows-portable-build.yml` を実行すると、
 portable ZIP の artifact を作成できます。

@@ -11,8 +11,27 @@ import axios from "axios";
 // axios インスタンス設定
 // ─────────────────────────────────────────────
 
+const DEV_BACKEND_BASE_URL = "http://127.0.0.1:8000";
+const DEV_FRONTEND_PORTS = new Set(["1420", "5173"]);
+
+const resolveApiBaseUrl = (): string => {
+  if (typeof window === "undefined") {
+    return DEV_BACKEND_BASE_URL;
+  }
+
+  const { protocol, hostname, port, origin } = window.location;
+  const isLocalBrowserOrigin = hostname === "127.0.0.1" || hostname === "localhost";
+  const isHttpOrigin = protocol === "http:" || protocol === "https:";
+
+  if (isHttpOrigin && isLocalBrowserOrigin && port && !DEV_FRONTEND_PORTS.has(port)) {
+    return origin;
+  }
+
+  return DEV_BACKEND_BASE_URL;
+};
+
 export const apiClient = axios.create({
-  baseURL: "http://127.0.0.1:8000",
+  baseURL: resolveApiBaseUrl(),
   timeout: 600000, // 10分（文字起こし・要約の長時間処理に対応）
   headers: {
     "Content-Type": "application/json",

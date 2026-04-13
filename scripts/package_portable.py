@@ -17,13 +17,14 @@ setlocal
 set "SCRIPT_DIR=%~dp0"
 set "LOCAL_MINUTES_APP_DATA_DIR=%LOCALAPPDATA%\LocalMinutes"
 set "LOCAL_MINUTES_FRONTEND_DIST=%SCRIPT_DIR%dist"
+set "LOCAL_MINUTES_API_PORT=18000"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ProgressPreference = 'SilentlyContinue';" ^
   "try {" ^
-  "  $health = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8000/api/health' -TimeoutSec 2;" ^
+  "  $health = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:18000/api/health' -TimeoutSec 2;" ^
   "  if ($health.StatusCode -eq 200) {" ^
-  "    Start-Process 'http://127.0.0.1:8000';" ^
+  "    Start-Process 'http://127.0.0.1:18000';" ^
   "    exit 0" ^
   "  }" ^
   "} catch {};" ^
@@ -37,7 +38,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ok = $false;" ^
   "for ($i = 0; $i -lt 90; $i++) {" ^
   "  try {" ^
-  "    $health = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8000/api/health' -TimeoutSec 2;" ^
+  "    $health = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:18000/api/health' -TimeoutSec 2;" ^
   "    if ($health.StatusCode -eq 200) {" ^
   "      $ok = $true;" ^
   "      break" ^
@@ -45,7 +46,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "  } catch {};" ^
   "  Start-Sleep -Seconds 1" ^
   "};" ^
-  "Start-Process 'http://127.0.0.1:8000';" ^
+  "Start-Process 'http://127.0.0.1:18000';" ^
   "if (-not $ok) { exit 1 }"
 """
 
@@ -65,11 +66,12 @@ Recommended usage
 2. Pull the model you want to use, for example:
      ollama pull qwen3:4b
 3. Double-click start-local-minutes.bat
-4. The browser UI opens at http://127.0.0.1:8000
+4. The browser UI opens at http://127.0.0.1:18000
 
 Notes
 -----
 - This package intentionally avoids Tauri/NSIS. It uses the browser as the UI.
+- The portable launcher uses port 18000 to avoid common conflicts on 8000.
 - Data is stored under %LOCALAPPDATA%\\LocalMinutes by default.
 - If the backend does not start on a clean Windows machine, install the latest
   Microsoft Visual C++ Redistributable and run the launcher again.
