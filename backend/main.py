@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -75,6 +76,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def emit_startup_log(message: str) -> None:
+    log_path = os.getenv("LOCAL_MINUTES_STARTUP_LOG_PATH")
+    if not log_path:
+        return
+
+    timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    try:
+        with open(log_path, "a", encoding="utf-8") as fp:
+            fp.write(f"{timestamp} {message}\n")
+    except Exception:
+        pass
+
+
 def runtime_host() -> str:
     return os.getenv("LOCAL_MINUTES_API_HOST", "127.0.0.1")
 
@@ -122,16 +136,20 @@ FRONTEND_RESERVED_PREFIXES = ("api/", "docs", "redoc", "openapi.json")
 async def lifespan(app: FastAPI):
     """アプリ起動・終了時の処理"""
     # 起動時: データベース初期化
+    emit_startup_log("lifespan:start")
     logger.info("データベースを初期化しています...")
     from .database import init_db
     init_db()
+    emit_startup_log("lifespan:init-db:ok")
     logger.info("データベース初期化完了")
     logger.info("ローカル AI 議事録作成アプリ バックエンドが起動しました")
     logger.info("API ドキュメント: http://%s:%s/docs", runtime_host(), runtime_port())
+    emit_startup_log("lifespan:ready")
 
     yield
 
     # 終了時の処理（必要に応じて追加）
+    emit_startup_log("lifespan:shutdown")
     logger.info("バックエンドを終了します")
 
 

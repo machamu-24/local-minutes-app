@@ -75,11 +75,32 @@ jobs:
           }
 
           $healthUrl = "http://127.0.0.1:8011/api/health"
+          $startupLog = Join-Path $env:RUNNER_TEMP "local-minutes-backend-startup.log"
+          $stdoutLog = Join-Path $env:RUNNER_TEMP "local-minutes-backend-stdout.log"
+          $stderrLog = Join-Path $env:RUNNER_TEMP "local-minutes-backend-stderr.log"
           $env:LOCAL_MINUTES_API_PORT = "8011"
           $env:LOCAL_MINUTES_APP_DATA_DIR = Join-Path $env:RUNNER_TEMP "local-minutes-backend-smoke"
           $env:LOCAL_MINUTES_CHECK_FAST_WHISPER_IMPORT = "1"
+          $env:LOCAL_MINUTES_STARTUP_LOG_PATH = $startupLog
 
-          $proc = Start-Process -FilePath $backendPath -PassThru
+          Remove-Item $startupLog, $stdoutLog, $stderrLog -Force -ErrorAction SilentlyContinue
+
+          $proc = Start-Process -FilePath $backendPath -PassThru -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
+
+          function Write-Diagnostics {
+            if (Test-Path $startupLog) {
+              Write-Host "===== startup log ====="
+              Get-Content $startupLog
+            }
+            if (Test-Path $stdoutLog) {
+              Write-Host "===== stdout ====="
+              Get-Content $stdoutLog
+            }
+            if (Test-Path $stderrLog) {
+              Write-Host "===== stderr ====="
+              Get-Content $stderrLog
+            }
+          }
 
           try {
             $healthy = $false
@@ -88,6 +109,7 @@ jobs:
               Start-Sleep -Seconds 2
 
               if ($proc.HasExited) {
+                Write-Diagnostics
                 throw "backend bundle exited early with code $($proc.ExitCode)"
               }
 
@@ -102,6 +124,7 @@ jobs:
             }
 
             if (-not $healthy) {
+              Write-Diagnostics
               throw "backend bundle health check did not pass via $healthUrl"
             }
           } finally {
@@ -137,6 +160,9 @@ jobs:
           $frontendDist = Join-Path $packageDir "dist"
           $healthUrl = "http://127.0.0.1:8012/api/health"
           $rootUrl = "http://127.0.0.1:8012/"
+          $startupLog = Join-Path $env:RUNNER_TEMP "local-minutes-portable-startup.log"
+          $stdoutLog = Join-Path $env:RUNNER_TEMP "local-minutes-portable-stdout.log"
+          $stderrLog = Join-Path $env:RUNNER_TEMP "local-minutes-portable-stderr.log"
 
           if (-not (Test-Path $backendPath)) {
             throw "missing portable backend executable: $backendPath"
@@ -149,8 +175,26 @@ jobs:
           $env:LOCAL_MINUTES_APP_DATA_DIR = Join-Path $env:RUNNER_TEMP "local-minutes-portable-smoke"
           $env:LOCAL_MINUTES_FRONTEND_DIST = $frontendDist
           $env:LOCAL_MINUTES_CHECK_FAST_WHISPER_IMPORT = "1"
+          $env:LOCAL_MINUTES_STARTUP_LOG_PATH = $startupLog
 
-          $proc = Start-Process -FilePath $backendPath -PassThru
+          Remove-Item $startupLog, $stdoutLog, $stderrLog -Force -ErrorAction SilentlyContinue
+
+          $proc = Start-Process -FilePath $backendPath -PassThru -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
+
+          function Write-Diagnostics {
+            if (Test-Path $startupLog) {
+              Write-Host "===== startup log ====="
+              Get-Content $startupLog
+            }
+            if (Test-Path $stdoutLog) {
+              Write-Host "===== stdout ====="
+              Get-Content $stdoutLog
+            }
+            if (Test-Path $stderrLog) {
+              Write-Host "===== stderr ====="
+              Get-Content $stderrLog
+            }
+          }
 
           try {
             $healthy = $false
@@ -159,6 +203,7 @@ jobs:
               Start-Sleep -Seconds 2
 
               if ($proc.HasExited) {
+                Write-Diagnostics
                 throw "portable backend exited early with code $($proc.ExitCode)"
               }
 
@@ -173,6 +218,7 @@ jobs:
             }
 
             if (-not $healthy) {
+              Write-Diagnostics
               throw "portable backend health check did not pass via $healthUrl"
             }
 
