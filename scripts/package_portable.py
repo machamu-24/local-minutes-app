@@ -31,7 +31,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "exit 1"
 if "%ERRORLEVEL%"=="0" exit /b 0
 
-start "" "%SCRIPT_DIR%local-minutes-backend.exe"
+start "" "%SCRIPT_DIR%backend\local-minutes-backend.exe"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ProgressPreference = 'SilentlyContinue';" ^
@@ -56,7 +56,7 @@ Local Minutes Portable (Windows)
 
 Files in this folder
 --------------------
-- local-minutes-backend.exe : bundled backend executable
+- backend/                  : bundled backend runtime
 - dist/                     : built frontend assets
 - start-local-minutes.bat   : starts the backend and opens the browser UI
 
@@ -85,7 +85,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backend-path",
         required=True,
-        help="Path to the built Windows backend executable",
+        help="Path to the built Windows backend executable or onedir bundle",
     )
     parser.add_argument(
         "--frontend-dist",
@@ -132,13 +132,27 @@ def write_text_file(path: Path, content: str) -> None:
     path.write_text(textwrap.dedent(content), encoding="utf-8", newline="\r\n")
 
 
+def copy_backend_artifact(source: Path, destination_dir: Path) -> Path:
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    if source.is_file():
+        ensure_file(source, "backend executable")
+        shutil.copy2(source, destination_dir / "local-minutes-backend.exe")
+    elif source.is_dir():
+        shutil.copytree(source, destination_dir, dirs_exist_ok=True)
+    else:
+        raise FileNotFoundError(f"backend artifact not found: {source}")
+
+    backend_executable = destination_dir / "local-minutes-backend.exe"
+    ensure_file(backend_executable, "portable backend executable")
+    return backend_executable
+
+
 def main() -> int:
     args = parse_args()
     backend_path = Path(args.backend_path).expanduser().resolve()
     frontend_dist = Path(args.frontend_dist).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
 
-    ensure_file(backend_path, "backend executable")
     ensure_dir(frontend_dist, "frontend dist")
 
     if output_dir.exists():
@@ -149,7 +163,7 @@ def main() -> int:
         shutil.rmtree(output_dir)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(backend_path, output_dir / "local-minutes-backend.exe")
+    copy_backend_artifact(backend_path, output_dir / "backend")
     shutil.copytree(frontend_dist, output_dir / "dist")
 
     if args.vc_redist_path:

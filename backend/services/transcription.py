@@ -1,13 +1,15 @@
 """
 services/transcription.py
 faster-whisper を使用した音声文字起こしサービス。
-GPU なし環境（macOS）向けに CPU / int8 量子化で動作する。
+GPU なし環境（macOS / Windows）向けに CPU / int8 量子化で動作する。
 処理は ThreadPoolExecutor で非同期実行し、jobs テーブルで状態管理する。
 """
 
+import os
 import json
 import logging
 import asyncio
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Literal
 from sqlalchemy.orm import Session
@@ -37,6 +39,46 @@ _whisper_model = None
 _whisper_model_name: Optional[str] = None
 
 
+def _build_import_guidance() -> str:
+    if getattr(sys, "frozen", False) and os.name == "nt":
+        return (
+            "Windows portable 版の backend 同梱に問題がある可能性があります。"
+            "新しい portable パッケージに更新してください。"
+        )
+    return (
+        "仮想環境を再作成するか、"
+        "pip install -r backend/requirements.txt を実行してください。"
+    )
+
+
+def _import_whisper_model_class():
+    try:
+        from faster_whisper import WhisperModel
+    except ModuleNotFoundError as exc:
+        missing_pkg = exc.name or "unknown"
+        if missing_pkg == "faster_whisper":
+            raise RuntimeError(
+                "faster-whisper がインストールされていません。"
+                f"{_build_import_guidance()}"
+            ) from exc
+        raise RuntimeError(
+            f"faster-whisper の依存パッケージ '{missing_pkg}' が不足しています。"
+            f"{_build_import_guidance()}"
+        ) from exc
+    except ImportError as exc:
+        raise RuntimeError(
+            f"faster-whisper の読み込みに失敗しました: {exc}. "
+            f"{_build_import_guidance()}"
+        ) from exc
+
+    return WhisperModel
+
+
+def assert_faster_whisper_importable() -> None:
+    """配布物の smoke test 用に faster-whisper の import 成否だけを検証する。"""
+    _import_whisper_model_class()
+
+
 def get_whisper_model(model_name: WhisperModelName = DEFAULT_WHISPER_MODEL):
     """
     faster-whisper モデルを取得する（遅延初期化・シングルトン）。
@@ -49,26 +91,7 @@ def get_whisper_model(model_name: WhisperModelName = DEFAULT_WHISPER_MODEL):
     """
     global _whisper_model, _whisper_model_name
     if _whisper_model is None or _whisper_model_name != model_name:
-        try:
-            from faster_whisper import WhisperModel
-        except ModuleNotFoundError as exc:
-            missing_pkg = exc.name or "unknown"
-            if missing_pkg == "faster_whisper":
-                raise RuntimeError(
-                    "faster-whisper がインストールされていません。"
-                    "pip install -r backend/requirements.txt を実行してください。"
-                ) from exc
-            raise RuntimeError(
-                f"faster-whisper の依存パッケージ '{missing_pkg}' が不足しています。"
-                "仮想環境を再作成するか、"
-                "pip install -r backend/requirements.txt を実行してください。"
-            ) from exc
-        except ImportError as exc:
-            raise RuntimeError(
-                f"faster-whisper の読み込みに失敗しました: {exc}. "
-                "仮想環境を再作成するか、"
-                "pip install -r backend/requirements.txt を実行してください。"
-            ) from exc
+        WhisperModel = _import_whisper_model_class()
 
         # モデル切り替え時は以前のインスタンスを解放しやすくする
         if _whisper_model_name and _whisper_model_name != model_name:

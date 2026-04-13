@@ -194,15 +194,25 @@ pnpm tauri build
 
 前提:
 
-- Windows で `scripts/build_backend.py` により backend EXE を作成済み
+- Windows で `scripts/build_backend.py --bundle-mode onedir` により backend bundle を作成済み
 - `frontend/dist` をビルド済み
 - 配布先 PC では Ollama を別途インストールして使う
+
+backend bundle 作成:
+
+```bash
+python scripts/build_backend.py \
+  --python backend/.venv/Scripts/python.exe \
+  --target-triple x86_64-pc-windows-msvc \
+  --bundle-mode onedir \
+  --skip-stage
+```
 
 portable パッケージ作成:
 
 ```bash
 python scripts/package_portable.py \
-  --backend-path src-tauri/binaries/local-minutes-backend-x86_64-pc-windows-msvc.exe \
+  --backend-path backend/dist/pyinstaller/local-minutes-backend \
   --frontend-dist frontend/dist \
   --output-dir dist/portable-windows \
   --archive \

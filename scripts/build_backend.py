@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PyInstaller で配布用 backend executable を生成し、Tauri sidecar 名に合わせて配置する。
+PyInstaller で配布用 backend artifact を生成し、必要に応じて所定の場所へ配置する。
 """
 
 from __future__ import annotations
@@ -110,6 +110,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="PyInstaller 出力のみ作成し、src-tauri/binaries へコピーしない",
     )
+    parser.add_argument(
+        "--bundle-mode",
+        choices=("onefile", "onedir"),
+        default="onefile",
+        help="PyInstaller bundle mode",
+    )
     return parser.parse_args()
 
 
@@ -133,7 +139,6 @@ def main() -> int:
         "PyInstaller",
         "--noconfirm",
         "--clean",
-        "--onefile",
         "--noconsole",
         "--name",
         BACKEND_BINARY_NAME,
@@ -148,6 +153,8 @@ def main() -> int:
         "--paths",
         str(backend_dir),
     ]
+
+    command.append("--onefile" if args.bundle_mode == "onefile" else "--onedir")
 
     for package_name in COLLECT_ALL_PACKAGES:
         command.extend(["--collect-all", package_name])
@@ -165,18 +172,28 @@ def main() -> int:
     subprocess.run(command, cwd=repo_root, env=env, check=True)
 
     suffix = executable_suffix(args.target_triple)
-    built_binary = dist_dir / f"{BACKEND_BINARY_NAME}{suffix}"
-    if not built_binary.exists():
-        raise FileNotFoundError(f"built backend binary not found: {built_binary}")
+    if args.bundle_mode == "onefile":
+        built_artifact = dist_dir / f"{BACKEND_BINARY_NAME}{suffix}"
+    else:
+        built_artifact = dist_dir / BACKEND_BINARY_NAME
 
-    print(f"Built backend binary: {built_binary}")
+    if not built_artifact.exists():
+        raise FileNotFoundError(f"built backend artifact not found: {built_artifact}")
+
+    print(f"Built backend artifact: {built_artifact}")
 
     if not args.skip_stage:
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        staged_binary = output_dir / f"{BACKEND_BINARY_NAME}-{args.target_triple}{suffix}"
-        shutil.copy2(built_binary, staged_binary)
-        print(f"Staged backend sidecar: {staged_binary}")
+        if args.bundle_mode == "onefile":
+            staged_artifact = output_dir / f"{BACKEND_BINARY_NAME}-{args.target_triple}{suffix}"
+            shutil.copy2(built_artifact, staged_artifact)
+        else:
+            staged_artifact = output_dir / f"{BACKEND_BINARY_NAME}-{args.target_triple}"
+            if staged_artifact.exists():
+                shutil.rmtree(staged_artifact)
+            shutil.copytree(built_artifact, staged_artifact)
+        print(f"Staged backend artifact: {staged_artifact}")
 
     return 0
 

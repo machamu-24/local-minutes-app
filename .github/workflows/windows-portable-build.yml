@@ -58,23 +58,26 @@ jobs:
           backend/.venv/Scripts/python.exe -m pip install --upgrade pip
           backend/.venv/Scripts/python.exe -m pip install -r backend/requirements.txt -r backend/requirements-build.txt
 
-      - name: Build backend executable
+      - name: Build backend bundle
         run: |
           backend/.venv/Scripts/python.exe scripts/build_backend.py \
             --python backend/.venv/Scripts/python.exe \
-            --target-triple x86_64-pc-windows-msvc
+            --target-triple x86_64-pc-windows-msvc \
+            --bundle-mode onedir \
+            --skip-stage
 
-      - name: Smoke test backend executable
+      - name: Smoke test backend bundle
         shell: pwsh
         run: |
-          $backendPath = "src-tauri/binaries/local-minutes-backend-x86_64-pc-windows-msvc.exe"
+          $backendPath = "backend/dist/pyinstaller/local-minutes-backend/local-minutes-backend.exe"
           if (-not (Test-Path $backendPath)) {
-            throw "missing backend executable: $backendPath"
+            throw "missing backend bundle executable: $backendPath"
           }
 
           $healthUrl = "http://127.0.0.1:8011/api/health"
           $env:LOCAL_MINUTES_API_PORT = "8011"
           $env:LOCAL_MINUTES_APP_DATA_DIR = Join-Path $env:RUNNER_TEMP "local-minutes-backend-smoke"
+          $env:LOCAL_MINUTES_CHECK_FAST_WHISPER_IMPORT = "1"
 
           $proc = Start-Process -FilePath $backendPath -PassThru
 
@@ -85,7 +88,7 @@ jobs:
               Start-Sleep -Seconds 2
 
               if ($proc.HasExited) {
-                throw "backend executable exited early with code $($proc.ExitCode)"
+                throw "backend bundle exited early with code $($proc.ExitCode)"
               }
 
               try {
@@ -99,7 +102,7 @@ jobs:
             }
 
             if (-not $healthy) {
-              throw "backend executable health check did not pass via $healthUrl"
+              throw "backend bundle health check did not pass via $healthUrl"
             }
           } finally {
             if ($proc -and -not $proc.HasExited) {
@@ -119,7 +122,7 @@ jobs:
       - name: Build portable package
         run: |
           backend/.venv/Scripts/python.exe scripts/package_portable.py \
-            --backend-path src-tauri/binaries/local-minutes-backend-x86_64-pc-windows-msvc.exe \
+            --backend-path backend/dist/pyinstaller/local-minutes-backend \
             --frontend-dist frontend/dist \
             --vc-redist-path dist/runtime/vc_redist.x64.exe \
             --output-dir dist/portable-windows \
@@ -130,7 +133,7 @@ jobs:
         shell: pwsh
         run: |
           $packageDir = "dist/portable-windows"
-          $backendPath = Join-Path $packageDir "local-minutes-backend.exe"
+          $backendPath = Join-Path $packageDir "backend/local-minutes-backend.exe"
           $frontendDist = Join-Path $packageDir "dist"
           $healthUrl = "http://127.0.0.1:8012/api/health"
           $rootUrl = "http://127.0.0.1:8012/"
@@ -145,6 +148,7 @@ jobs:
           $env:LOCAL_MINUTES_API_PORT = "8012"
           $env:LOCAL_MINUTES_APP_DATA_DIR = Join-Path $env:RUNNER_TEMP "local-minutes-portable-smoke"
           $env:LOCAL_MINUTES_FRONTEND_DIST = $frontendDist
+          $env:LOCAL_MINUTES_CHECK_FAST_WHISPER_IMPORT = "1"
 
           $proc = Start-Process -FilePath $backendPath -PassThru
 
