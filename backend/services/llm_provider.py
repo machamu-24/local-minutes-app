@@ -135,6 +135,8 @@ def _call_ollama(
         "prompt": prompt,
         "system": system_prompt,
         "stream": False,
+        "think": False,
+        "keep_alive": "15m",
         "options": {
             "temperature": 0.3,
             "num_predict": 2048,
@@ -143,13 +145,45 @@ def _call_ollama(
 
     try:
         with httpx.Client(timeout=300.0) as client:
-            response = client.post(_join_url(base_url, "/api/generate"), json=payload)
-            response.raise_for_status()
-            data = response.json()
-            return _require_non_empty_response(
-                data.get("response", ""),
-                provider="Ollama",
-                model=model,
+            last_data: dict | None = None
+            for attempt in range(2):
+                response = client.post(_join_url(base_url, "/api/generate"), json=payload)
+                response.raise_for_status()
+                data = response.json()
+                last_data = data
+
+                content = (data.get("response") or "").strip()
+                if content:
+                    return content
+
+                done_reason = str(data.get("done_reason") or "").strip().lower()
+                eval_count = data.get("eval_count")
+
+                # Windows の Ollama では、初回リクエストが model load のみで
+                # 空応答になることがあるため 1 回だけ即時再試行する。
+                should_retry = (
+                    attempt == 0
+                    and (
+                        done_reason == "load"
+                        or eval_count in (None, 0)
+                    )
+                )
+                if should_retry:
+                    continue
+
+            extra = ""
+            if last_data:
+                done_reason = last_data.get("done_reason")
+                eval_count = last_data.get("eval_count")
+                thinking_len = len((last_data.get("thinking") or "").strip())
+                extra = (
+                    f" done_reason={done_reason!r}, eval_count={eval_count!r},"
+                    f" thinking_chars={thinking_len}"
+                )
+
+            raise RuntimeError(
+                "Ollama から空の応答が返されました。"
+                f"モデル '{model}' の起動状態と利用可否を確認してください。{extra}"
             )
     except httpx.ConnectError as exc:
         raise RuntimeError(
