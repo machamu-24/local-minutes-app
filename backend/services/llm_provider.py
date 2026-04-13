@@ -113,6 +113,16 @@ def call_llm(
     )
 
 
+def _require_non_empty_response(content: str, *, provider: str, model: str) -> str:
+    normalized = content.strip()
+    if normalized:
+        return normalized
+    raise RuntimeError(
+        f"{provider} から空の応答が返されました。"
+        f"モデル '{model}' の起動状態と利用可否を確認してください。"
+    )
+
+
 def _call_ollama(
     *,
     base_url: str,
@@ -136,7 +146,11 @@ def _call_ollama(
             response = client.post(_join_url(base_url, "/api/generate"), json=payload)
             response.raise_for_status()
             data = response.json()
-            return data.get("response", "").strip()
+            return _require_non_empty_response(
+                data.get("response", ""),
+                provider="Ollama",
+                model=model,
+            )
     except httpx.ConnectError as exc:
         raise RuntimeError(
             "LLM ランタイムに接続できません。"
@@ -190,7 +204,11 @@ def _call_openai_compatible(
             message = choices[0].get("message") or {}
             content = message.get("content")
             if isinstance(content, str):
-                return content.strip()
+                return _require_non_empty_response(
+                    content,
+                    provider="OpenAI 互換 LLM",
+                    model=model,
+                )
 
             if isinstance(content, list):
                 text_parts = [
@@ -198,7 +216,11 @@ def _call_openai_compatible(
                     for item in content
                     if isinstance(item, dict) and item.get("type") == "text"
                 ]
-                return "\n".join(part for part in text_parts if part).strip()
+                return _require_non_empty_response(
+                    "\n".join(part for part in text_parts if part),
+                    provider="OpenAI 互換 LLM",
+                    model=model,
+                )
 
             raise RuntimeError("応答本文の形式が不正です。")
     except httpx.ConnectError as exc:

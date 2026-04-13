@@ -162,6 +162,16 @@ export interface MessageResponse {
   detail?: string;
 }
 
+export interface LlmStatus {
+  provider: "ollama" | "openai_compatible";
+  base_url: string;
+  configured_model: string;
+  available: boolean;
+  model_loaded: boolean;
+  available_models: string[];
+  message: string;
+}
+
 export interface RuntimeEnvironment {
   app_data_dir: string;
   audio_dir: string;
@@ -328,6 +338,12 @@ export const healthCheck = async (): Promise<{ status: string }> => {
 /** Ollama 稼働状況確認 */
 export const getOllamaStatus = async () => {
   const res = await apiClient.get("/api/ollama/status");
+  return res.data;
+};
+
+/** LLM ランタイム稼働状況確認 */
+export const getLlmStatus = async (): Promise<LlmStatus> => {
+  const res = await apiClient.get<LlmStatus>("/api/llm/status");
   return res.data;
 };
 

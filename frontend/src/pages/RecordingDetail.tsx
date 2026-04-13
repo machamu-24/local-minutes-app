@@ -16,12 +16,14 @@ import {
   getTranscript,
   getSummary,
   getSummaryTemplates,
+  getLlmStatus,
   startTranscription,
   startSummarization,
   pollJobUntilDone,
   deleteRecording,
   deleteAudio,
   retainAudio,
+  LlmStatus,
   Recording,
   Transcript,
   Summary,
@@ -85,6 +87,8 @@ export default function RecordingDetail() {
   const [summaryTemplates, setSummaryTemplates] = useState<SummaryTemplateOption[]>(
     FALLBACK_SUMMARY_TEMPLATES
   );
+  const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
+  const [llmStatusError, setLlmStatusError] = useState<string | null>(null);
   const [templateLoadError, setTemplateLoadError] = useState<string | null>(null);
   const [selectedTemplateName, setSelectedTemplateName] = useState<string>(
     FALLBACK_SUMMARY_TEMPLATES[0].name
@@ -93,6 +97,7 @@ export default function RecordingDetail() {
 
   // データ取得
   const fetchData = useCallback(async () => {
+    let summaryLoaded = false;
     try {
       const rec = await getRecording(recordingId);
       setRecording(rec);
@@ -114,23 +119,35 @@ export default function RecordingDetail() {
       if (rec.state === "DONE") {
         try {
           const s = await getSummary(recordingId, rec.last_summary_template_name ?? undefined);
+          if (!s.content_md?.trim()) {
+            throw new Error(
+              "要約生成は完了しましたが、議事録本文が空でした。LLM のモデル状態を確認して再生成してください。"
+            );
+          }
           setSummary(s);
           setSelectedTemplateName(s.template_name);
-        } catch {
-          // まだ存在しない場合は無視
+          summaryLoaded = true;
+        } catch (e) {
+          setSummary(null);
+          setJobError(
+            e instanceof Error ? e.message : "議事録の取得に失敗しました"
+          );
         }
+      } else {
+        setSummary(null);
       }
 
       // 現在の状態に応じてアクティブステップを設定
       if (rec.state === "IMPORTED") setActiveStep("transcribe");
       else if (rec.state === "TRANSCRIBED") setActiveStep("edit");
-      else if (rec.state === "DONE") setActiveStep("review");
+      else if (rec.state === "DONE") setActiveStep(summaryLoaded ? "review" : "summarize");
 
     } catch (e) {
       setError(e instanceof Error ? e.message : "データの取得に失敗しました");
     } finally {
       setLoading(false);
     }
+    return { summaryLoaded };
   }, [recordingId]);
 
   useEffect(() => {
@@ -155,6 +172,25 @@ export default function RecordingDetail() {
 
     loadSummaryTemplates();
   }, []);
+
+  const refreshLlmStatus = useCallback(async (): Promise<LlmStatus | null> => {
+    try {
+      const status = await getLlmStatus();
+      setLlmStatus(status);
+      setLlmStatusError(null);
+      return status;
+    } catch (e) {
+      const message =
+        e instanceof Error ? e.message : "LLM ランタイム状態の取得に失敗しました";
+      setLlmStatus(null);
+      setLlmStatusError(message);
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshLlmStatus();
+  }, [refreshLlmStatus]);
 
   useEffect(() => {
     if (summaryTemplates.length === 0) return;
@@ -189,6 +225,21 @@ export default function RecordingDetail() {
     setSummarizing(true);
     setJobError(null);
     try {
+      const status = await refreshLlmStatus();
+      if (!status) {
+        throw new Error("LLM ランタイム状態を確認できませんでした。")
+      }
+      if (!status.available) {
+        throw new Error(
+          `${status.message} Ollama を起動してから再実行してください。`
+        );
+      }
+      if (!status.model_loaded) {
+        throw new Error(
+          `${status.message} 例: ollama pull ${status.configured_model}`
+        );
+      }
+
       const job = await startSummarization(recordingId, {
         templateName: selectedTemplateName,
         customPrompt,
@@ -199,10 +250,15 @@ export default function RecordingDetail() {
         throw new Error(completedJob.log || "要約生成に失敗しました");
       }
       // データを再取得
-      await fetchData();
+      const { summaryLoaded } = await fetchData();
+      await refreshLlmStatus();
       setCustomPrompt("");
+      if (!summaryLoaded) {
+        throw new Error(
+          "要約生成ジョブは完了しましたが、議事録本文を取得できませんでした。LLM 状態を確認して再生成してください。"
+        );
+      }
       setActiveStep("review");
-      // 完了後に音声削除ダイアログを表示
       setShowAudioDialog(true);
     } catch (e) {
       setJobError(e instanceof Error ? e.message : "要約生成に失敗しました");
@@ -334,6 +390,7 @@ export default function RecordingDetail() {
   const currentSummaryTemplate = summaryTemplates.find(
     (template) => template.name === summary?.template_name
   );
+  const llmReady = Boolean(llmStatus?.available && llmStatus?.model_loaded);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -628,26 +685,54 @@ export default function RecordingDetail() {
                 </div>
 
                 {/* Ollama 注意書き */}
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                <div className={`rounded-xl p-4 border ${
+                  llmReady
+                    ? "bg-green-50 border-green-200"
+                    : "bg-amber-50 border-amber-200"
+                }`}>
                   <div className="flex items-start gap-3">
-                    <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg className={`w-5 h-5 flex-shrink-0 mt-0.5 ${
+                      llmReady ? "text-green-600" : "text-amber-600"
+                    }`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                         d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <div>
-                      <p className="text-sm font-medium text-amber-800">Ollama が必要です</p>
-                      <p className="text-xs text-amber-700 mt-1">
-                        事前に Ollama を起動し、llama3 または mistral モデルをダウンロードしてください。
+                      <p className={`text-sm font-medium ${
+                        llmReady ? "text-green-800" : "text-amber-800"
+                      }`}>
+                        {llmReady ? "LLM ランタイム準備完了" : "LLM ランタイムの確認が必要です"}
                       </p>
-                      <code className="text-xs bg-amber-100 px-2 py-0.5 rounded mt-1 inline-block">
-                        ollama serve &amp;&amp; ollama pull llama3
-                      </code>
+                      {llmStatus ? (
+                        <>
+                          <p className={`text-xs mt-1 ${
+                            llmReady ? "text-green-700" : "text-amber-700"
+                          }`}>
+                            {llmStatus.message}
+                          </p>
+                          <p className={`text-xs mt-1 ${
+                            llmReady ? "text-green-700" : "text-amber-700"
+                          }`}>
+                            provider: {llmStatus.provider} / model: {llmStatus.configured_model}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-xs text-amber-700 mt-1">
+                          {llmStatusError ?? "LLM 状態を確認できませんでした。"}
+                        </p>
+                      )}
+                      {!llmReady && (
+                        <code className="text-xs bg-amber-100 px-2 py-0.5 rounded mt-2 inline-block">
+                          ollama pull {llmStatus?.configured_model ?? "qwen3:4b"}
+                        </code>
+                      )}
                     </div>
                   </div>
                 </div>
 
                 <button
                   onClick={handleStartSummarization}
+                  disabled={!llmReady}
                   className="btn-primary w-full py-3"
                 >
                   <svg className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
