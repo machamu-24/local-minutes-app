@@ -10,7 +10,7 @@
 | 音声取り込み | wav / mp3 / m4a / webm / ogg / mp4 の取り込みと、その場録音に対応 |
 | 文字起こし | faster-whisper（CPU / int8量子化）でローカル実行 |
 | テキスト編集 | 文字起こし結果をブラウザ上で修正・保存 |
-| 議事録生成 | Ollama（llama3 / mistral）で分割要約 → 統合要約の2段階処理 |
+| 議事録生成 | Ollama（qwen3.5:9b）で分割要約 → 統合要約の2段階処理 |
 | テンプレート選択 | 汎用 / 決定事項重視 / アクション重視の議事録テンプレートを選択可能 |
 | カスタム指示 | 要約前に今回だけの追加指示を入力可能、使用した指示文面は議事録に保存 |
 | Markdown 出力 | 議事録のコピー・.md ファイルダウンロード |
@@ -87,11 +87,8 @@ brew install ollama
 ### 4. Ollama モデルのダウンロード
 
 ```bash
-# llama3（推奨）
-ollama pull llama3
-
-# または mistral
-ollama pull mistral
+# 既定モデル
+ollama pull qwen3.5:9b
 ```
 
 > **注意**: モデルのダウンロードには数GB のディスク容量と時間が必要です。
@@ -227,8 +224,7 @@ python scripts/package_portable.py \
 配布先 PC では `start-local-minutes.bat` を実行してください。
 ブラウザで `http://127.0.0.1:18000` が開きます。
 
-配布先 PC の Ollama モデルは、16GB クラスのメモリならまず `qwen3:4b` を推奨します。
-余裕がある PC では `qwen3:8b` も候補です。
+配布先 PC の Ollama モデルは、既定では `qwen3.5:9b` を使用します。
 
 portable 版はローカル既存サービスとの衝突を避けるため、`8000` ではなく `18000` を使います。
 

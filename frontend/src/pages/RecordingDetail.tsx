@@ -723,7 +723,7 @@ export default function RecordingDetail() {
                       )}
                       {!llmReady && (
                         <code className="text-xs bg-amber-100 px-2 py-0.5 rounded mt-2 inline-block">
-                          ollama pull {llmStatus?.configured_model ?? "qwen3:4b"}
+                          ollama pull {llmStatus?.configured_model ?? "qwen3.5:9b"}
                         </code>
                       )}
                     </div>
